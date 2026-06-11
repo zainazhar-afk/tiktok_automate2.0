@@ -1,0 +1,17 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+yt-dlp>=2024.12.0
+python-multipart>=0.0.20
+aiofiles>=24.1.0
+httpx>=0.28.0
+pydantic>=2.10.0
+python-dotenv>=1.0.0
+redis>=5.0.0
+rq>=2.0.0
+
+# System dependencies (install separately; not pip packages):
+# - ffmpeg (required): merges downloads and runs anti-detection processing
+#   Windows: winget install Gyan.FFmpeg
+# - aria2c (optional): faster parallel downloads for yt-dlp
+#   Windows: winget install aria2.aria2
+# - redis (required for worker queue): docker compose up -d
