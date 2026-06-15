@@ -13,6 +13,21 @@ function filterBody(filters?: Partial<DiscoveryFilters>, pageToken?: string | nu
   };
 }
 
+/** Extract a human-readable message (FastAPI `detail`) from an error response. */
+async function errorMessage(res: Response): Promise<string> {
+  const raw = await res.text();
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed?.detail) {
+      if (res.status === 429) return `Quota limit: ${parsed.detail}`;
+      return typeof parsed.detail === "string" ? parsed.detail : JSON.stringify(parsed.detail);
+    }
+  } catch {
+    // not JSON
+  }
+  return raw || `Request failed (${res.status})`;
+}
+
 export async function searchVideos(
   query: string,
   filters?: Partial<DiscoveryFilters>,
@@ -23,7 +38,7 @@ export async function searchVideos(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, ...filterBody(filters, pageToken) }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new Error(await errorMessage(res));
   return res.json();
 }
 
@@ -38,7 +53,7 @@ export async function discoverContent(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source, query, ...filterBody(filters, pageToken) }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new Error(await errorMessage(res));
   return res.json();
 }
 

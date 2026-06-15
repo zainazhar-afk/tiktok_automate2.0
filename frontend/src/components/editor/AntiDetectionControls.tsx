@@ -1,6 +1,7 @@
 "use client";
 
 import { useApp } from "@/lib/store";
+import type { AntiDetectionConfig } from "@/types";
 import { AntiDetectionLevel } from "@/types";
 
 const LEVELS: { value: AntiDetectionLevel; label: string; desc: string }[] = [
@@ -23,6 +24,8 @@ const CONTROLS: { key: keyof NonNullable<ReturnType<typeof useApp>["state"]["ant
   { key: "speed_variation", label: "Speed Variation" },
   { key: "horizontal_flip", label: "Horizontal Flip" },
   { key: "rotation_jitter", label: "Rotation Jitter" },
+  { key: "smart_crop", label: "Smart Crop (content-aware)" },
+  { key: "auto_subtitles", label: "Auto Subtitles (burn-in)" },
 ];
 
 interface Props {
@@ -132,6 +135,81 @@ export default function AntiDetectionControls({ compact = false }: Props) {
               {ctrl.label}
             </label>
           ))}
+        </div>
+      )}
+
+      {/* Enhancements: music, voiceover, subtitles */}
+      {!compact && (
+        <div className="mt-4 pt-3 border-t border-gray-800 space-y-3">
+          <div className="text-xs font-medium text-gray-400">Audio & Captions</div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex flex-col gap-1 text-[11px] text-gray-400">
+              Background music (filename)
+              <input
+                type="text"
+                placeholder="e.g. upbeat.mp3"
+                value={state.antiDetection.background_music ?? ""}
+                onChange={(e) => setAntiDetection({ background_music: e.target.value || null })}
+                className="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-200"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-[11px] text-gray-400">
+              Voiceover (filename)
+              <input
+                type="text"
+                placeholder="e.g. narration.mp3"
+                value={state.antiDetection.voiceover_path ?? ""}
+                onChange={(e) => setAntiDetection({ voiceover_path: e.target.value || null })}
+                className="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-200"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-[11px] text-gray-400">
+              Music volume ({Math.round(state.antiDetection.music_volume * 100)}%)
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={state.antiDetection.music_volume}
+                onChange={(e) => setAntiDetection({ music_volume: Number(e.target.value) })}
+                className="accent-purple-600"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-[11px] text-gray-400">
+              Subtitle style
+              <select
+                value={state.antiDetection.subtitle_style}
+                onChange={(e) =>
+                  setAntiDetection({ subtitle_style: e.target.value as AntiDetectionConfig["subtitle_style"] })
+                }
+                className="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-200"
+              >
+                <option value="default">Default</option>
+                <option value="bold">Bold (yellow)</option>
+                <option value="minimal">Minimal</option>
+              </select>
+            </label>
+          </div>
+
+          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer hover:text-white">
+            <input
+              type="checkbox"
+              checked={state.antiDetection.music_ducking}
+              onChange={(e) => setAntiDetection({ music_ducking: e.target.checked })}
+              className="rounded bg-gray-700 border-gray-600 text-purple-600 focus:ring-purple-500/50"
+            />
+            Duck music under speech (sidechain)
+          </label>
+
+          <p className="text-[10px] text-gray-600 leading-relaxed">
+            Music/voiceover files go in <code>backend/assets/music</code> and{" "}
+            <code>backend/assets/voiceover</code>. Auto subtitles require{" "}
+            <code>pip install faster-whisper</code>.
+          </p>
         </div>
       )}
 
