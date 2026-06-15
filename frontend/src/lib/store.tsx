@@ -188,6 +188,7 @@ interface AppContextValue {
   discoverCompetitor: (handle: string) => Promise<void>;
   searchVideos: (query: string, pageToken?: string | null) => Promise<void>;
   setFilters: (filters: Partial<DiscoveryFilters>) => void;
+  applyFilters: () => Promise<void>;
   downloadSelected: () => Promise<void>;
   processSelected: () => Promise<void>;
   runPipeline: () => Promise<void>;
@@ -203,6 +204,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
   stateRef.current = state;
+
+  // Remember the last discovery action so filter changes can re-run it.
+  const lastDiscoveryRef = useRef<{ type: "trending" | "search" | "hashtag" | "competitor"; query?: string }>({
+    type: "trending",
+  });
 
   useEffect(() => {
     try {
@@ -285,6 +291,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const discoverTrending = useCallback(async (pageToken?: string | null) => {
+    lastDiscoveryRef.current = { type: "trending" };
     dispatch({ type: "SET_LOADING", payload: true });
     try {
       const { discoverContent } = await import("@/lib/api");
@@ -302,6 +309,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [applyDiscovery]);
 
   const discoverByHashtag = useCallback(async (hashtag: string, pageToken?: string | null) => {
+    lastDiscoveryRef.current = { type: "hashtag", query: hashtag };
     dispatch({ type: "SET_LOADING", payload: true });
     try {
       const { discoverContent } = await import("@/lib/api");
@@ -313,6 +321,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [applyDiscovery]);
 
   const discoverCompetitor = useCallback(async (handle: string) => {
+    lastDiscoveryRef.current = { type: "competitor", query: handle };
     dispatch({ type: "SET_LOADING", payload: true });
     try {
       const { discoverContent } = await import("@/lib/api");
@@ -324,6 +333,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const searchVideosFn = useCallback(async (query: string, pageToken?: string | null) => {
+    lastDiscoveryRef.current = { type: "search", query };
     dispatch({ type: "SET_LOADING", payload: true });
     try {
       const { searchVideos } = await import("@/lib/api");
@@ -333,6 +343,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_ERROR", payload: e instanceof Error ? e.message : String(e) });
     }
   }, [applyDiscovery]);
+
+  // Re-run the most recent discovery with the current filters applied.
+  const applyFilters = useCallback(async () => {
+    const last = lastDiscoveryRef.current;
+    if (last.type === "search" && last.query) return searchVideosFn(last.query);
+    if (last.type === "hashtag" && last.query) return discoverByHashtag(last.query);
+    if (last.type === "competitor" && last.query) return discoverCompetitor(last.query);
+    return discoverTrending();
+  }, [searchVideosFn, discoverByHashtag, discoverCompetitor, discoverTrending]);
 
   const downloadSelected = useCallback(async () => {
     const selected = stateRef.current.discoveredVideos.filter((v) =>
@@ -451,6 +470,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         discoverCompetitor,
         searchVideos: searchVideosFn,
         setFilters,
+        applyFilters,
         downloadSelected,
         processSelected,
         runPipeline,

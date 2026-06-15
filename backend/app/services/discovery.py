@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 from app.config import get_settings
 from app.services import youtube_api
+from app.services.youtube_api import QuotaExceededError
 from app.utils.helpers import find_ytdlp, run_command, find_python
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,8 @@ async def search_videos(query: str, **kwargs) -> dict:
             if result.get("videos"):
                 _cache[cache_key] = (result, datetime.now())
                 return result
+        except QuotaExceededError:
+            raise  # surface to the UI; do NOT silently fall back to yt-dlp
         except Exception as e:
             logger.warning(f"YouTube API search failed, falling back to yt-dlp: {e}")
 
@@ -111,6 +114,8 @@ async def discover_trending(**kwargs) -> dict:
             return await youtube_api.discover_trending(
                 max_results=max_results, page_token=page_token, **filters
             )
+        except QuotaExceededError:
+            raise  # surface to the UI; do NOT silently fall back to yt-dlp
         except Exception as e:
             logger.warning(f"YouTube API trending failed: {e}")
 
@@ -122,6 +127,8 @@ async def discover_hashtag(hashtag: str, **kwargs) -> dict:
     if settings.youtube_api_key:
         try:
             return await youtube_api.discover_hashtag(hashtag, **kwargs)
+        except QuotaExceededError:
+            raise  # surface to the UI; do NOT silently fall back to yt-dlp
         except Exception as e:
             logger.warning(f"YouTube API hashtag failed: {e}")
     tag = hashtag.lstrip("#")

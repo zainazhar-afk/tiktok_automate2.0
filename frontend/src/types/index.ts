@@ -19,6 +19,14 @@ export interface AntiDetectionConfig {
   rotation_jitter: boolean;
   auto_crop_916: boolean;
   strong_audio_randomization: boolean;
+  random_seed?: number | null;
+  smart_crop: boolean;
+  background_music?: string | null;
+  music_volume: number;
+  music_ducking: boolean;
+  voiceover_path?: string | null;
+  auto_subtitles: boolean;
+  subtitle_style: "default" | "bold" | "minimal";
 }
 
 export const DEFAULT_ANTI_DETECTION: AntiDetectionConfig = {
@@ -38,6 +46,14 @@ export const DEFAULT_ANTI_DETECTION: AntiDetectionConfig = {
   rotation_jitter: false,
   auto_crop_916: true,
   strong_audio_randomization: true,
+  random_seed: null,
+  smart_crop: false,
+  background_music: null,
+  music_volume: 0.15,
+  music_ducking: true,
+  voiceover_path: null,
+  auto_subtitles: false,
+  subtitle_style: "default",
 };
 
 export interface DiscoveryFilters {
@@ -48,6 +64,8 @@ export interface DiscoveryFilters {
   max_views?: number;
   published_within_days?: number;
   region_code?: string;
+  niche?: string;
+  video_category_id?: string;
   max_results: number;
 }
 
@@ -58,8 +76,42 @@ export const DEFAULT_FILTERS: DiscoveryFilters = {
   min_views: undefined,
   published_within_days: undefined,
   region_code: "US",
+  niche: undefined,
+  video_category_id: undefined,
   max_results: 20,
 };
+
+// Content niches shown in the discovery UI (must match backend NICHE_PRESETS keys)
+export const NICHE_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "All niches" },
+  { value: "motivational", label: "Motivational" },
+  { value: "comedy", label: "Comedy" },
+  { value: "gaming", label: "Gaming" },
+  { value: "fitness", label: "Fitness" },
+  { value: "sports", label: "Sports" },
+  { value: "food", label: "Food / Cooking" },
+  { value: "education", label: "Education / Facts" },
+  { value: "tech", label: "Tech" },
+  { value: "beauty", label: "Beauty" },
+  { value: "pets", label: "Pets / Animals" },
+  { value: "travel", label: "Travel" },
+  { value: "music", label: "Music / Dance" },
+];
+
+// ISO 3166-1 alpha-2 regions for YouTube trending
+export const REGION_OPTIONS: { value: string; label: string }[] = [
+  { value: "US", label: "United States" },
+  { value: "GB", label: "United Kingdom" },
+  { value: "CA", label: "Canada" },
+  { value: "AU", label: "Australia" },
+  { value: "IN", label: "India" },
+  { value: "DE", label: "Germany" },
+  { value: "FR", label: "France" },
+  { value: "ES", label: "Spain" },
+  { value: "BR", label: "Brazil" },
+  { value: "JP", label: "Japan" },
+  { value: "KR", label: "South Korea" },
+];
 
 export interface VideoInfo {
   id: string;
