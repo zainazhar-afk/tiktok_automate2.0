@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.models.schemas import SearchRequest, DiscoverRequest, BatchDownloadRequest
 from app.services import discovery, downloader
+from app.services.youtube_api import QuotaExceededError
 
 router = APIRouter()
 
@@ -18,6 +19,7 @@ def _search_filters(req) -> dict:
         "published_within_days": req.published_within_days,
         "region_code": req.region_code,
         "video_category_id": req.video_category_id,
+        "niche": req.niche,
     }
 
 
@@ -26,6 +28,8 @@ async def search_videos(req: SearchRequest):
     try:
         result = await discovery.search_videos(req.query, **_search_filters(req))
         return result
+    except QuotaExceededError as e:
+        raise HTTPException(status_code=429, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
@@ -50,6 +54,8 @@ async def discover_content(req: DiscoverRequest):
         return {**result, "source": result.get("source", req.source)}
     except HTTPException:
         raise
+    except QuotaExceededError as e:
+        raise HTTPException(status_code=429, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Discovery failed: {str(e)}")
 

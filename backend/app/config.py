@@ -14,8 +14,24 @@ class Settings:
     max_process_concurrent: int = int(os.getenv("MAX_PROCESS_CONCURRENT", "4"))
     data_dir: str = os.path.abspath("data")
 
+    # Whisper model size for auto subtitles: tiny|base|small|medium|large-v3
+    whisper_model: str = os.getenv("WHISPER_MODEL", "base")
+    # Asset directories for background music / voiceover tracks
+    assets_dir: str = os.path.abspath(os.getenv("ASSETS_DIR", "assets"))
+
+    @property
+    def music_dir(self) -> str:
+        return os.path.join(self.assets_dir, "music")
+
+    @property
+    def voiceover_dir(self) -> str:
+        return os.path.join(self.assets_dir, "voiceover")
+
 
 @lru_cache
 def get_settings() -> Settings:
-    os.makedirs(Settings().data_dir, exist_ok=True)
-    return Settings()
+    s = Settings()
+    os.makedirs(s.data_dir, exist_ok=True)
+    os.makedirs(s.music_dir, exist_ok=True)
+    os.makedirs(s.voiceover_dir, exist_ok=True)
+    return s

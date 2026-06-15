@@ -9,6 +9,11 @@ python-dotenv>=1.0.0
 redis>=5.0.0
 rq>=2.0.0
 
+# Optional: auto-subtitles (whisper transcription). Heavy install (~1-2GB w/ models).
+# Enable the "Auto Subtitles" toggle only after installing this:
+#   pip install faster-whisper
+# faster-whisper>=1.0.0
+
 # System dependencies (install separately; not pip packages):
 # - ffmpeg (required): merges downloads and runs anti-detection processing
 #   Windows: winget install Gyan.FFmpeg

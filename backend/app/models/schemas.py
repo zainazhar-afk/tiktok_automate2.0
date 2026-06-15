@@ -27,6 +27,22 @@ class AntiDetectionConfig(BaseModel):
     auto_crop_916: bool = True
     strong_audio_randomization: bool = True
 
+    # Per-video fingerprint seed (auto-generated per render when None)
+    random_seed: Optional[int] = None
+
+    # Smart, content-aware crop using ffmpeg cropdetect (removes letter/pillarbox)
+    smart_crop: bool = False
+
+    # Background music / voiceover layering with auto-ducking
+    background_music: Optional[str] = None   # filename inside the assets/music dir
+    music_volume: float = 0.15               # 0..1, music level under speech
+    music_ducking: bool = True               # duck music under speech via sidechain
+    voiceover_path: Optional[str] = None     # filename inside assets/voiceover dir
+
+    # Auto subtitles (burned in via whisper transcription)
+    auto_subtitles: bool = False
+    subtitle_style: str = "default"          # default | bold | minimal
+
 
 class VideoInfo(BaseModel):
     id: str
@@ -82,6 +98,7 @@ class SearchRequest(BaseModel):
     published_within_days: Optional[int] = None
     region_code: Optional[str] = None
     video_category_id: Optional[str] = None
+    niche: Optional[str] = None  # motivational, comedy, gaming, etc.
 
 
 class DiscoverRequest(BaseModel):
@@ -97,6 +114,7 @@ class DiscoverRequest(BaseModel):
     published_within_days: Optional[int] = None
     region_code: Optional[str] = None
     video_category_id: Optional[str] = None
+    niche: Optional[str] = None  # motivational, comedy, gaming, etc.
 
 
 class JobStatus(str, Enum):
