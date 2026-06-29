@@ -422,7 +422,7 @@ export default function SubtitleEditor() {
               />
               <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
                 <label className="grid gap-1 text-xs text-gray-400">
-                  Language
+                  Audio language
                   <select
                     value={transcriptLanguage}
                     onChange={(e) => setTranscriptLanguage(e.target.value)}

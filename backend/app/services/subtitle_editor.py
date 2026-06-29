@@ -226,8 +226,14 @@ async def transcribe_track(
             provider=provider,
         )
         if not generated:
+            if requested_language == "en":
+                raise RuntimeError(
+                    "Transcript generation failed for English audio. "
+                    "If the source audio is Urdu, choose Audio language = Urdu, Auto detect, or Multilingual."
+                )
             raise RuntimeError(
-                "Transcript generation failed. Check Groq/Deepgram keys or install faster-whisper."
+                "Transcript generation failed. Check Groq/Deepgram keys, choose the source audio language, "
+                "or install faster-whisper."
             )
         srt_path = generated
 
