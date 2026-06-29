@@ -200,15 +200,31 @@ def get_or_create_track(video_id: str) -> dict:
     return state_store.get_subtitle_track(video_id) or track
 
 
-async def transcribe_track(video_id: str, force: bool = True) -> dict:
+def _normalize_language(value: str | None) -> str:
+    raw = (value or "").strip().lower()
+    return "auto" if raw in {"", "auto", "detect", "default", "none"} else raw
+
+
+async def transcribe_track(
+    video_id: str,
+    force: bool = True,
+    language: str = "auto",
+    provider: str = "auto",
+) -> dict:
     video_id = _safe_video_id(video_id)
     source = source_video_path(video_id)
     if not source:
         raise FileNotFoundError("Processed video not found")
 
+    requested_language = _normalize_language(language)
     srt_path = os.path.join(OUTPUT_DIR, f"{video_id}.srt")
     if force or not os.path.exists(srt_path):
-        generated = await subtitles.generate_subtitles(source, video_id)
+        generated = await subtitles.generate_subtitles(
+            source,
+            video_id,
+            language=requested_language,
+            provider=provider,
+        )
         if not generated:
             raise RuntimeError(
                 "Transcript generation failed. Check Groq/Deepgram keys or install faster-whisper."
@@ -221,7 +237,8 @@ async def transcribe_track(video_id: str, force: bool = True) -> dict:
         raise RuntimeError("Transcript generation produced no words")
 
     existing = state_store.get_subtitle_track(video_id) or {}
-    track = _track_from_words(video_id, words, existing.get("language", "en"))
+    track_language = requested_language if requested_language != "auto" else existing.get("language", "auto")
+    track = _track_from_words(video_id, words, track_language)
     track.update({
         "style": existing.get("style", "default"),
         "position": existing.get("position", "bottom"),

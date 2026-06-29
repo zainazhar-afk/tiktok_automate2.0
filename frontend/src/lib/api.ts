@@ -186,9 +186,26 @@ export async function saveSubtitleTrack(track: SubtitleTrack): Promise<SubtitleT
   return res.json();
 }
 
-export async function transcribeSubtitleTrack(videoId: string): Promise<SubtitleTrack> {
+export type TranscriptionProvider = "auto" | "groq" | "deepgram" | "whisper";
+
+export interface TranscriptionOptions {
+  language?: string;
+  provider?: TranscriptionProvider;
+  force?: boolean;
+}
+
+export async function transcribeSubtitleTrack(
+  videoId: string,
+  options: TranscriptionOptions = {}
+): Promise<SubtitleTrack> {
   const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/transcribe`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      language: options.language || "auto",
+      provider: options.provider || "auto",
+      force: options.force ?? true,
+    }),
   });
   if (!res.ok) throw new Error(await errorMessage(res));
   return res.json();

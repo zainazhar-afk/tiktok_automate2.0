@@ -182,6 +182,12 @@ class SubtitleImportRequest(BaseModel):
     content: str
 
 
+class SubtitleTranscribeRequest(BaseModel):
+    language: str = "auto"
+    provider: str = "auto"  # auto | groq | deepgram | whisper
+    force: bool = True
+
+
 class SubtitleTranslateRequest(BaseModel):
     target_language: str
     source_language: str = "en"

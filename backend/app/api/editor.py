@@ -5,6 +5,7 @@ from fastapi.responses import PlainTextResponse
 from app.models.schemas import (
     SubtitleImportRequest,
     SubtitleRenderResponse,
+    SubtitleTranscribeRequest,
     SubtitleTrack,
     SubtitleTranslateRequest,
 )
@@ -45,9 +46,15 @@ async def import_subtitle_track(video_id: str, req: SubtitleImportRequest):
 
 
 @router.post("/subtitles/{video_id}/transcribe")
-async def transcribe_subtitle_track(video_id: str):
+async def transcribe_subtitle_track(video_id: str, req: SubtitleTranscribeRequest | None = None):
+    payload = req or SubtitleTranscribeRequest()
     try:
-        return await subtitle_editor.transcribe_track(video_id, force=True)
+        return await subtitle_editor.transcribe_track(
+            video_id,
+            force=payload.force,
+            language=payload.language,
+            provider=payload.provider,
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:

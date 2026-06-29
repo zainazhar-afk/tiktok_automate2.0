@@ -14,16 +14,38 @@ import {
   saveSubtitleTrack,
   transcribeSubtitleTrack,
   translateSubtitleTrack,
+  type TranscriptionProvider,
 } from "@/lib/api";
 
 const EMOJIS = ["🔥", "✨", "👇", "💡", "✅", "⚡"];
 const LANGUAGES = [
+  { value: "ur", label: "Urdu" },
   { value: "es", label: "Spanish" },
   { value: "fr", label: "French" },
   { value: "de", label: "German" },
   { value: "pt", label: "Portuguese" },
   { value: "hi", label: "Hindi" },
   { value: "ja", label: "Japanese" },
+];
+const TRANSCRIPT_LANGUAGES = [
+  { value: "auto", label: "Auto detect" },
+  { value: "ur", label: "Urdu" },
+  { value: "en", label: "English" },
+  { value: "hi", label: "Hindi" },
+  { value: "ar", label: "Arabic" },
+  { value: "fa", label: "Persian" },
+  { value: "es", label: "Spanish" },
+  { value: "fr", label: "French" },
+  { value: "de", label: "German" },
+  { value: "pt", label: "Portuguese" },
+  { value: "ja", label: "Japanese" },
+  { value: "multi", label: "Multilingual" },
+];
+const TRANSCRIPTION_PROVIDERS: { value: TranscriptionProvider; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "deepgram", label: "Deepgram" },
+  { value: "groq", label: "Groq Whisper" },
+  { value: "whisper", label: "Local Whisper" },
 ];
 
 function formatTime(seconds: number) {
@@ -69,6 +91,8 @@ export default function SubtitleEditor() {
   const [importFormat, setImportFormat] = useState<"srt" | "vtt">("srt");
   const [importText, setImportText] = useState("");
   const [targetLanguage, setTargetLanguage] = useState("es");
+  const [transcriptLanguage, setTranscriptLanguage] = useState("auto");
+  const [transcriptionProvider, setTranscriptionProvider] = useState<TranscriptionProvider>("auto");
 
   const activeVideo = videos.find((video) => video.id === activeId) || null;
   const previewWords = useMemo(() => track?.words.slice(0, 8) || [], [track]);
@@ -99,6 +123,9 @@ export default function SubtitleEditor() {
         ...data,
         transcript: data.transcript || (data.words || []).map((word) => word.text).join(" "),
       });
+      if (data.language && !["auto", "en"].includes(data.language)) {
+        setTranscriptLanguage(data.language);
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -225,12 +252,18 @@ export default function SubtitleEditor() {
     setTranscribing(true);
     setError(null);
     try {
-      const transcribed = await transcribeSubtitleTrack(activeId);
+      const transcribed = await transcribeSubtitleTrack(activeId, {
+        language: transcriptLanguage,
+        provider: transcriptionProvider,
+        force: true,
+      });
       setTrack({
         ...transcribed,
         transcript: transcribed.transcript || transcribed.words.map((word) => word.text).join(" "),
       });
-      setMessage(`Generated transcript with ${transcribed.words.length} words`);
+      const languageLabel = TRANSCRIPT_LANGUAGES.find((item) => item.value === transcriptLanguage)?.label || transcriptLanguage;
+      const providerLabel = TRANSCRIPTION_PROVIDERS.find((item) => item.value === transcriptionProvider)?.label || transcriptionProvider;
+      setMessage(`Generated ${languageLabel} transcript with ${transcribed.words.length} words via ${providerLabel}`);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -387,14 +420,42 @@ export default function SubtitleEditor() {
                 disabled={!track}
                 className="h-40 w-full resize-none rounded border border-gray-700 bg-gray-950 p-3 text-sm text-gray-200 focus:border-purple-500 focus:outline-none disabled:opacity-50"
               />
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                <label className="grid gap-1 text-xs text-gray-400">
+                  Language
+                  <select
+                    value={transcriptLanguage}
+                    onChange={(e) => setTranscriptLanguage(e.target.value)}
+                    disabled={!activeId || transcribing}
+                    className="rounded border border-gray-700 bg-gray-950 px-2 py-2 text-gray-200 disabled:opacity-50"
+                  >
+                    {TRANSCRIPT_LANGUAGES.map((language) => (
+                      <option key={language.value} value={language.value}>{language.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs text-gray-400">
+                  Provider
+                  <select
+                    value={transcriptionProvider}
+                    onChange={(e) => setTranscriptionProvider(e.target.value as TranscriptionProvider)}
+                    disabled={!activeId || transcribing}
+                    className="rounded border border-gray-700 bg-gray-950 px-2 py-2 text-gray-200 disabled:opacity-50"
+                  >
+                    {TRANSCRIPTION_PROVIDERS.map((provider) => (
+                      <option key={provider.value} value={provider.value}>{provider.label}</option>
+                    ))}
+                  </select>
+                </label>
                 <button
                   onClick={handleTranscribe}
                   disabled={!activeId || transcribing}
-                  className="rounded bg-purple-700 px-3 py-2 text-xs text-white hover:bg-purple-600 disabled:opacity-40"
+                  className="self-end rounded bg-purple-700 px-3 py-2 text-xs text-white hover:bg-purple-600 disabled:opacity-40"
                 >
                   {transcribing ? "Transcribing..." : "Generate transcript"}
                 </button>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   onClick={applyTranscript}
                   disabled={!track}

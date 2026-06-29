@@ -14,6 +14,8 @@ import asyncio
 import logging
 import os
 import mimetypes
+import re
+import shutil
 from typing import Optional
 
 import httpx
@@ -29,6 +31,117 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 _model_cache: dict = {}
 _groq_key_offset = 0
 _deepgram_key_offset = 0
+AUTO_LANGUAGE_VALUES = {"", "auto", "detect", "default", "none"}
+TRANSCRIPTION_PROVIDERS = {"auto", "groq", "deepgram", "whisper"}
+
+
+def _normalize_language(value: str | None) -> str:
+    raw = (value or "").strip().lower()
+    return "" if raw in AUTO_LANGUAGE_VALUES else raw
+
+
+def _normalize_provider(value: str | None) -> str:
+    raw = (value or "auto").strip().lower()
+    return raw if raw in TRANSCRIPTION_PROVIDERS else "auto"
+
+
+def _groq_language(value: str | None) -> str:
+    language = _normalize_language(value)
+    return "" if language == "multi" else language
+
+
+def _find_ffprobe() -> Optional[str]:
+    exe = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+    from_path = shutil.which(exe)
+    if from_path:
+        return from_path
+    ffmpeg = find_ffmpeg()
+    if ffmpeg:
+        sibling = os.path.join(os.path.dirname(ffmpeg), exe)
+        if os.path.isfile(sibling):
+            return sibling
+    return None
+
+
+async def _media_duration(input_path: str) -> float:
+    ffprobe = _find_ffprobe()
+    if not ffprobe:
+        return 0.0
+    cmd = [
+        ffprobe,
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        input_path,
+    ]
+    rc, stdout, _stderr = await asyncio.to_thread(run_command, cmd, timeout=60)
+    if rc != 0:
+        return 0.0
+    try:
+        return max(0.0, float(stdout.strip()))
+    except ValueError:
+        return 0.0
+
+
+def _parse_srt_ts(value: str) -> float:
+    try:
+        h, m, s = value.strip().replace(",", ".").split(":")
+        return int(h) * 3600 + int(m) * 60 + float(s)
+    except (ValueError, AttributeError):
+        return 0.0
+
+
+def _srt_stats(srt_path: str) -> dict:
+    with open(srt_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    time_re = re.compile(
+        r"(?P<start>\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*"
+        r"(?P<end>\d{2}:\d{2}:\d{2}[,.]\d{3})"
+    )
+    cue_count = 0
+    last_end = 0.0
+    text_lines: list[str] = []
+    for raw in content.splitlines():
+        line = raw.strip()
+        if not line or line.isdigit() or line.upper() == "WEBVTT":
+            continue
+        match = time_re.search(line)
+        if match:
+            cue_count += 1
+            last_end = max(last_end, _parse_srt_ts(match.group("end")))
+            continue
+        text_lines.append(line)
+
+    text = " ".join(text_lines).strip()
+    return {
+        "cues": cue_count,
+        "words": len(re.findall(r"\S+", text)),
+        "chars": len(text),
+        "last_end": last_end,
+    }
+
+
+async def _srt_looks_usable(srt_path: str, input_path: str, provider: str) -> bool:
+    stats = _srt_stats(srt_path)
+    if stats["words"] == 0 and stats["chars"] < 2:
+        logger.warning(f"{provider} transcript produced no text")
+        return False
+
+    duration = await _media_duration(input_path)
+    if duration < 12:
+        return True
+
+    if duration >= 60 and stats["words"] < 14 and stats["chars"] < 80:
+        logger.warning(f"{provider} transcript looks too short for {duration:.1f}s media")
+        return False
+    if duration >= 30 and stats["words"] < 8 and stats["chars"] < 40:
+        logger.warning(f"{provider} transcript looks too short for {duration:.1f}s media")
+        return False
+    if duration >= 30 and stats["last_end"] < duration * 0.2 and stats["words"] < 16:
+        logger.warning(f"{provider} transcript covers only {stats['last_end']:.1f}s of {duration:.1f}s media")
+        return False
+    return True
 
 
 def _whisper_available() -> bool:
@@ -112,7 +225,7 @@ def _groq_cues(payload: dict) -> list[dict]:
     return []
 
 
-async def _groq_to_srt(input_path: str, srt_path: str, video_id: str) -> bool:
+async def _groq_to_srt(input_path: str, srt_path: str, video_id: str, language: str = "") -> bool:
     global _groq_key_offset
 
     settings = get_settings()
@@ -123,6 +236,7 @@ async def _groq_to_srt(input_path: str, srt_path: str, video_id: str) -> bool:
     audio_path = await _compressed_audio_path(input_path, video_id)
     ordered = keys[_groq_key_offset:] + keys[:_groq_key_offset]
     mime = mimetypes.guess_type(audio_path)[0] or "audio/mpeg"
+    selected_language = _groq_language(language)
 
     async with httpx.AsyncClient(timeout=300) as client:
         for key in ordered:
@@ -134,8 +248,8 @@ async def _groq_to_srt(input_path: str, srt_path: str, video_id: str) -> bool:
                         "response_format": "verbose_json",
                         "temperature": "0",
                     }
-                    if settings.groq_language:
-                        data["language"] = settings.groq_language
+                    if selected_language:
+                        data["language"] = selected_language
                     resp = await client.post(
                         "https://api.groq.com/openai/v1/audio/transcriptions",
                         headers={"Authorization": f"Bearer {key}"},
@@ -165,9 +279,6 @@ def _deepgram_cues(payload: dict) -> list[dict]:
         text = str(utterance.get("transcript", "")).strip()
         if not text:
             continue
-        speaker = utterance.get("speaker")
-        if speaker is not None:
-            text = f"Speaker {speaker}: {text}"
         cues.append({
             "start": float(utterance.get("start", 0.0) or 0.0),
             "end": float(utterance.get("end", 0.0) or 0.0),
@@ -196,9 +307,6 @@ def _deepgram_cues(payload: dict) -> list[dict]:
             for word in current
         ).strip()
         if text:
-            speaker = current[0].get("speaker")
-            if speaker is not None:
-                text = f"Speaker {speaker}: {text}"
             cues.append({
                 "start": float(current[0].get("start", 0.0) or 0.0),
                 "end": float(current[-1].get("end", current[0].get("start", 0.0) + 0.4) or 0.0),
@@ -226,7 +334,7 @@ def _deepgram_cues(payload: dict) -> list[dict]:
     return cues
 
 
-async def _deepgram_to_srt(input_path: str, srt_path: str) -> bool:
+async def _deepgram_to_srt(input_path: str, srt_path: str, language: str = "") -> bool:
     global _deepgram_key_offset
 
     settings = get_settings()
@@ -236,14 +344,18 @@ async def _deepgram_to_srt(input_path: str, srt_path: str) -> bool:
 
     ordered = keys[_deepgram_key_offset:] + keys[:_deepgram_key_offset]
     mime = mimetypes.guess_type(input_path)[0] or "application/octet-stream"
+    selected_language = _normalize_language(language)
     params = {
         "model": settings.deepgram_model,
-        "language": settings.deepgram_language,
         "smart_format": "true",
         "punctuate": "true",
         "utterances": "true",
         "diarize": "true",
     }
+    if selected_language:
+        params["language"] = selected_language
+    else:
+        params["detect_language"] = "true"
     with open(input_path, "rb") as f:
         media = f.read()
 
@@ -274,7 +386,7 @@ async def _deepgram_to_srt(input_path: str, srt_path: str) -> bool:
     return False
 
 
-def _transcribe_to_srt(input_path: str, srt_path: str, model_size: str) -> bool:
+def _transcribe_to_srt(input_path: str, srt_path: str, model_size: str, language: str = "") -> bool:
     """Blocking transcription; runs inside a thread."""
     from faster_whisper import WhisperModel
 
@@ -284,7 +396,13 @@ def _transcribe_to_srt(input_path: str, srt_path: str, model_size: str) -> bool:
         model = WhisperModel(model_size, device="auto", compute_type="int8")
         _model_cache[model_size] = model
 
-    segments, _info = model.transcribe(input_path, vad_filter=True, word_timestamps=False)
+    selected_language = _normalize_language(language)
+    segments, _info = model.transcribe(
+        input_path,
+        vad_filter=True,
+        word_timestamps=False,
+        language=selected_language or None,
+    )
 
     cues = []
     for seg in segments:
@@ -295,46 +413,76 @@ def _transcribe_to_srt(input_path: str, srt_path: str, model_size: str) -> bool:
     return _write_cues_srt(cues, srt_path)
 
 
-async def generate_subtitles(input_path: str, video_id: str) -> Optional[str]:
+async def generate_subtitles(
+    input_path: str,
+    video_id: str,
+    language: str | None = None,
+    provider: str | None = None,
+) -> Optional[str]:
     """Transcribe audio to an .srt file. Returns path or None when unavailable."""
     if not os.path.exists(input_path):
         return None
 
     srt_path = os.path.join(OUTPUT_DIR, f"{video_id}.srt")
     settings = get_settings()
-    provider = settings.transcription_provider.lower()
+    selected_provider = _normalize_provider(provider or settings.transcription_provider)
+    explicit_language = language is not None
+    selected_language = _normalize_language(language)
+    groq_language = selected_language if explicit_language else _normalize_language(settings.groq_language)
+    deepgram_language = selected_language if explicit_language else _normalize_language(settings.deepgram_language)
+    whisper_language = selected_language if explicit_language else ""
 
-    if provider in {"auto", "groq"} and settings.groq_api_keys:
-        ok = await _groq_to_srt(input_path, srt_path, video_id)
-        if ok and os.path.exists(srt_path):
+    async def usable(provider_name: str) -> bool:
+        if not os.path.exists(srt_path):
+            return False
+        if selected_provider != "auto":
+            return True
+        ok = await _srt_looks_usable(srt_path, input_path, provider_name)
+        if not ok:
+            try:
+                os.remove(srt_path)
+            except OSError:
+                pass
+        return ok
+
+    if selected_provider in {"auto", "groq"} and settings.groq_api_keys:
+        ok = await _groq_to_srt(input_path, srt_path, video_id, groq_language)
+        if ok and await usable("Groq"):
             return srt_path
-        if provider == "groq":
+        if selected_provider == "groq":
             logger.warning("Groq transcription failed and provider is locked to groq")
             return None
 
-    if provider in {"auto", "deepgram"} and settings.deepgram_api_keys:
-        ok = await _deepgram_to_srt(input_path, srt_path)
-        if ok and os.path.exists(srt_path):
+    if selected_provider in {"auto", "deepgram"} and settings.deepgram_api_keys:
+        ok = await _deepgram_to_srt(input_path, srt_path, deepgram_language)
+        if ok and await usable("Deepgram"):
             return srt_path
-        if provider == "deepgram":
+        if selected_provider == "deepgram":
             logger.warning("Deepgram transcription failed and provider is locked to deepgram")
             return None
 
-    if not _whisper_available():
-        logger.warning(
-            "faster-whisper is not installed and Deepgram is unavailable; "
-            "skipping. Install with: pip install faster-whisper"
-        )
-        return None
+    if selected_provider in {"auto", "whisper"}:
+        if not _whisper_available():
+            logger.warning(
+                "faster-whisper is not installed and API transcription is unavailable; "
+                "skipping. Install with: pip install faster-whisper"
+            )
+            return None
 
-    model_size = get_settings().whisper_model
-    try:
-        ok = await asyncio.to_thread(_transcribe_to_srt, input_path, srt_path, model_size)
-    except Exception as e:
-        logger.warning(f"Subtitle transcription failed for {video_id}: {e}")
-        return None
+        model_size = get_settings().whisper_model
+        try:
+            ok = await asyncio.to_thread(
+                _transcribe_to_srt,
+                input_path,
+                srt_path,
+                model_size,
+                whisper_language,
+            )
+        except Exception as e:
+            logger.warning(f"Subtitle transcription failed for {video_id}: {e}")
+            return None
 
-    if ok and os.path.exists(srt_path):
-        logger.info(f"Subtitles generated: {srt_path}")
-        return srt_path
+        if ok and await usable("faster-whisper"):
+            logger.info(f"Subtitles generated: {srt_path}")
+            return srt_path
     return None
