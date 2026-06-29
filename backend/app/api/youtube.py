@@ -68,11 +68,17 @@ async def download_video(req: dict):
     if not url or not video_id:
         raise HTTPException(status_code=400, detail="url and video_id required")
 
+    existed_before = bool(downloader.find_merged_file(video_id))
     path = await downloader.download_video(url, video_id, force=force)
     if not path:
         raise HTTPException(status_code=500, detail="Download failed — check ffmpeg is installed")
 
-    return {"video_id": video_id, "path": path, "status": "downloaded", "skipped": not force and path}
+    return {
+        "video_id": video_id,
+        "path": path,
+        "status": "downloaded",
+        "skipped": bool(existed_before and not force),
+    }
 
 
 @router.post("/batch-download")

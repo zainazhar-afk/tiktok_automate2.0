@@ -19,11 +19,11 @@ import asyncio
 import logging
 import json
 import re
-from typing import Optional
+from typing import Callable, Optional
 
 from app.config import get_settings
-from app.utils.helpers import find_ffmpeg, run_command
-from app.models.schemas import AntiDetectionConfig, AntiDetectionLevel
+from app.utils.helpers import find_ffmpeg, run_command, run_command_with_progress
+from app.models.schemas import AntiDetectionConfig, AntiDetectionLevel, TextRemovalMode
 from app.services import subtitles as subtitles_service
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,8 @@ def resolve_preset(config: AntiDetectionConfig) -> AntiDetectionConfig:
         config.audio_segment_reversal = False
         config.remove_watermark = True
         config.remove_text_overlays = True
+        config.remove_top_text_banner = False
+        config.text_removal_mode = TextRemovalMode.BLUR
         config.speed_variation = False
         config.horizontal_flip = False
         config.rotation_jitter = False
@@ -81,6 +83,8 @@ def resolve_preset(config: AntiDetectionConfig) -> AntiDetectionConfig:
         config.audio_segment_reversal = True
         config.remove_watermark = True
         config.remove_text_overlays = True
+        config.remove_top_text_banner = False
+        config.text_removal_mode = TextRemovalMode.BLUR
         config.speed_variation = True
         config.horizontal_flip = True
         config.rotation_jitter = True
@@ -228,6 +232,48 @@ def _subtitle_strip() -> str:
     return f"delogo=x=2:y={TARGET_H - band_h - 2}:w={TARGET_W - 4}:h={band_h}:show=0"
 
 
+def _region_pixels(x_pct: float, y_pct: float, w_pct: float, h_pct: float) -> tuple[int, int, int, int]:
+    x = max(0, min(TARGET_W - 2, int(TARGET_W * x_pct)))
+    y = max(0, min(TARGET_H - 2, int(TARGET_H * y_pct)))
+    w = max(2, min(TARGET_W - x, int(TARGET_W * w_pct)))
+    h = max(2, min(TARGET_H - y, int(TARGET_H * h_pct)))
+    return x, y, w, h
+
+
+def _text_region_filter(x: int, y: int, w: int, h: int, mode: TextRemovalMode) -> str:
+    if mode == TextRemovalMode.COVER:
+        return f"drawbox=x={x}:y={y}:w={w}:h={h}:color=black@1:t=fill"
+    # FFmpeg has no semantic text inpainting; delogo is the best built-in
+    # region repair filter and behaves like a soft blur/fill.
+    return f"delogo=x={x}:y={y}:w={w}:h={h}:show=0"
+
+
+def _text_removal_steps(config: AntiDetectionConfig) -> list[str]:
+    steps: list[str] = []
+    mode = config.text_removal_mode
+    top_h = int(TARGET_H * config.top_text_height_pct) if config.remove_top_text_banner else 0
+    bottom_h = int(TARGET_H * config.bottom_text_height_pct) if config.remove_text_overlays else 0
+
+    if mode == TextRemovalMode.CROP and (top_h or bottom_h):
+        crop_h = max(2, TARGET_H - top_h - bottom_h)
+        steps.append(f"crop={TARGET_W}:{crop_h}:0:{top_h},scale={TARGET_W}:{TARGET_H}")
+    else:
+        if top_h:
+            steps.append(_text_region_filter(2, 2, TARGET_W - 4, max(2, top_h), mode))
+        if bottom_h:
+            y = TARGET_H - bottom_h - 2
+            steps.append(_text_region_filter(2, y, TARGET_W - 4, max(2, bottom_h), mode))
+
+    for region in config.text_removal_regions:
+        x, y, w, h = _region_pixels(region.x_pct, region.y_pct, region.w_pct, region.h_pct)
+        region_mode = region.mode or mode
+        if region_mode == TextRemovalMode.CROP:
+            region_mode = TextRemovalMode.BLUR
+        steps.append(_text_region_filter(x, y, w, h, region_mode))
+
+    return steps
+
+
 def _scene_reversal(duration: float):
     seg = duration / 3
     end = 2 * duration / 3
@@ -276,8 +322,7 @@ def build_video_steps(config: AntiDetectionConfig, probe: dict, rng: random.Rand
         steps.append(_crop_jitter(rng))
     if config.remove_watermark:
         steps.append(_watermark_removal())
-    if config.remove_text_overlays:
-        steps.append(_subtitle_strip())
+    steps.extend(_text_removal_steps(config))
     if config.frame_insertion:
         steps.append("tpad=start=1:start_mode=add:color=black")
     if speed is not None:
@@ -462,7 +507,19 @@ def _seed_for(config: AntiDetectionConfig, video_id: str) -> int:
     return (base ^ (hash(video_id) & 0x7FFFFFFF)) & 0x7FFFFFFF
 
 
-async def process_video(input_path: str, video_id: str, config: AntiDetectionConfig) -> Optional[str]:
+def _with_progress_output(cmd: list[str]) -> list[str]:
+    """Add ffmpeg progress output without mutating the base command."""
+    if "-progress" in cmd:
+        return cmd
+    return [cmd[0], "-progress", "pipe:1", "-nostats", *cmd[1:]]
+
+
+async def process_video(
+    input_path: str,
+    video_id: str,
+    config: AntiDetectionConfig,
+    progress_callback: Optional[Callable[[float], None]] = None,
+) -> Optional[str]:
     """Process a video with anti-detection filters. Returns validated output path."""
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
@@ -497,7 +554,16 @@ async def process_video(input_path: str, video_id: str, config: AntiDetectionCon
     )
     logger.info(f"FFmpeg filter_complex length: {len(cmd)} args")
 
-    rc, _out, stderr = await asyncio.to_thread(run_command, cmd, timeout=900)
+    if progress_callback:
+        rc, _out, stderr = await asyncio.to_thread(
+            run_command_with_progress,
+            _with_progress_output(cmd),
+            duration=duration,
+            progress_callback=progress_callback,
+            timeout=900,
+        )
+    else:
+        rc, _out, stderr = await asyncio.to_thread(run_command, cmd, timeout=900)
 
     if rc == 0:
         ok, reason = await validate_output(output_path)
@@ -506,8 +572,9 @@ async def process_video(input_path: str, video_id: str, config: AntiDetectionCon
             return output_path
         logger.warning(f"Output failed validation ({reason}); trying simple fallback")
     else:
+        err_tail = stderr or _out
         logger.warning(f"Complex processing failed (rc={rc}); trying simple fallback. "
-                       f"stderr tail: {stderr[-400:] if stderr else 'none'}")
+                       f"stderr tail: {err_tail[-400:] if err_tail else 'none'}")
 
     # Fallback: minimal safe transform that still normalizes to 9:16
     fb_vf = (f"scale={TARGET_W}:{TARGET_H}:force_original_aspect_ratio=increase,"
@@ -520,7 +587,16 @@ async def process_video(input_path: str, video_id: str, config: AntiDetectionCon
         "-movflags", "+faststart", "-pix_fmt", "yuv420p",
         output_path,
     ]
-    rc2, _o2, stderr2 = await asyncio.to_thread(run_command, simple_cmd, timeout=300)
+    if progress_callback:
+        rc2, _o2, stderr2 = await asyncio.to_thread(
+            run_command_with_progress,
+            _with_progress_output(simple_cmd),
+            duration=duration,
+            progress_callback=progress_callback,
+            timeout=300,
+        )
+    else:
+        rc2, _o2, stderr2 = await asyncio.to_thread(run_command, simple_cmd, timeout=300)
     if rc2 == 0:
         ok, reason = await validate_output(output_path)
         if ok:
@@ -528,7 +604,8 @@ async def process_video(input_path: str, video_id: str, config: AntiDetectionCon
             return output_path
         logger.error(f"Fallback output invalid: {reason}")
     else:
-        logger.error(f"Fallback failed (rc={rc2}): {stderr2[-300:] if stderr2 else 'none'}")
+        err_tail = stderr2 or _o2
+        logger.error(f"Fallback failed (rc={rc2}): {err_tail[-300:] if err_tail else 'none'}")
 
     return None
 

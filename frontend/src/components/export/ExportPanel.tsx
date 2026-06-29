@@ -1,18 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { API_URL } from "@/types";
 import type { ProcessedVideoFile } from "@/types";
 import { listVideos, deleteVideo } from "@/lib/api";
 
 export default function ExportPanel() {
   const [videos, setVideos] = useState<ProcessedVideoFile[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
-  const fetchVideos = async () => {
-    setLoading(true);
+  const fetchVideos = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     try {
       const data = await listVideos("processed");
       setVideos(data.videos || []);
@@ -21,13 +23,16 @@ export default function ExportPanel() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchVideos();
-    const interval = setInterval(fetchVideos, 15000);
-    return () => clearInterval(interval);
-  }, []);
+    const initial = setTimeout(() => void fetchVideos(false), 0);
+    const interval = setInterval(() => void fetchVideos(false), 15000);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(interval);
+    };
+  }, [fetchVideos]);
 
   const copyText = async (id: string, text: string) => {
     await navigator.clipboard.writeText(text);
@@ -45,6 +50,21 @@ export default function ExportPanel() {
     }
   };
 
+  const filteredVideos = videos.filter((video) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    return [
+      video.title,
+      video.filename,
+      video.caption,
+      ...(video.hashtags || []),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(q);
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -54,13 +74,22 @@ export default function ExportPanel() {
             Includes auto-generated captions, hashtags, and TikTok cover thumbnails.
           </p>
         </div>
-        <button
-          onClick={fetchVideos}
-          disabled={loading}
-          className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs rounded-lg disabled:opacity-50"
-        >
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
+        <div className="flex items-center gap-2">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter exports..."
+            className="w-48 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-purple-500"
+          />
+          <button
+            onClick={() => fetchVideos()}
+            disabled={loading}
+            className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs rounded-lg disabled:opacity-50"
+          >
+            {loading ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {!loading && videos.length === 0 && (
@@ -69,16 +98,26 @@ export default function ExportPanel() {
         </div>
       )}
 
+      {!loading && videos.length > 0 && filteredVideos.length === 0 && (
+        <div className="text-center py-20 text-gray-500">
+          <p className="text-lg">No exports match the filter</p>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {videos.map((video) => {
+        {filteredVideos.map((video) => {
           const hashtagText = (video.hashtags || []).join(" ");
           const captionBlock = [video.caption, hashtagText].filter(Boolean).join("\n\n");
+          const videoUrl = `${API_URL}/api/videos/file/${encodeURIComponent(video.filename)}`;
+          const coverUrl = video.cover_filename
+            ? `${API_URL}/api/videos/file/${encodeURIComponent(video.cover_filename)}`
+            : null;
           return (
-            <div key={video.id} className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
+            <div key={video.filename} className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
               <div className="grid grid-cols-2 gap-0">
                 <div className="aspect-[9/16] bg-gray-800">
                   <video
-                    src={`${API_URL}/api/videos/file/${video.filename}`}
+                    src={videoUrl}
                     controls
                     className="w-full h-full object-contain"
                     preload="metadata"
@@ -87,7 +126,7 @@ export default function ExportPanel() {
                 {video.cover_filename && (
                   <div className="aspect-[9/16] bg-gray-800 border-l border-gray-700">
                     <img
-                      src={`${API_URL}/api/videos/file/${video.cover_filename}`}
+                      src={coverUrl || ""}
                       alt="TikTok cover"
                       className="w-full h-full object-cover"
                     />
@@ -113,7 +152,7 @@ export default function ExportPanel() {
 
                 <div className="flex flex-wrap gap-2">
                   <a
-                    href={`${API_URL}/api/videos/file/${video.filename}`}
+                    href={videoUrl}
                     download={video.filename}
                     className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded"
                   >
@@ -121,7 +160,7 @@ export default function ExportPanel() {
                   </a>
                   {video.cover_filename && (
                     <a
-                      href={`${API_URL}/api/videos/file/${video.cover_filename}`}
+                      href={coverUrl || ""}
                       download={video.cover_filename}
                       className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs rounded"
                     >
@@ -136,6 +175,12 @@ export default function ExportPanel() {
                       {copied === video.id ? "Copied!" : "Copy caption"}
                     </button>
                   )}
+                  <Link
+                    href={`/editor?video=${encodeURIComponent(video.id)}`}
+                    className="px-3 py-1.5 bg-purple-700 hover:bg-purple-600 text-white text-xs rounded"
+                  >
+                    Edit
+                  </Link>
                   <button
                     onClick={() => handleDelete(video.filename)}
                     disabled={deleting === video.filename}

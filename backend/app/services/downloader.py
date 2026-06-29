@@ -4,7 +4,11 @@ Ultra-fast YouTube video downloader using yt-dlp + aria2c.
 import os
 import asyncio
 import logging
+import re
+import subprocess
+import time
 from typing import Optional
+from typing import Callable
 
 from app.config import get_settings
 from app.utils.helpers import find_ytdlp, find_aria2c, find_ffmpeg, run_command
@@ -40,7 +44,68 @@ def _cleanup_fragments(video_id: str):
                 pass
 
 
-async def download_video(url: str, video_id: str, *, force: bool = False) -> Optional[str]:
+def _parse_ytdlp_progress(line: str) -> Optional[float]:
+    percent = re.search(r"\[download\]\s+(\d+(?:\.\d+)?)%", line)
+    if percent:
+        return max(0.0, min(1.0, float(percent.group(1)) / 100.0))
+    if "Merging formats" in line or "Merger" in line:
+        return 0.95
+    if "Deleting original file" in line:
+        return 0.98
+    return None
+
+
+def _run_download_command(
+    cmd: list[str],
+    *,
+    timeout: int,
+    progress_callback: Callable[[float, str], None],
+) -> tuple[int, str, str]:
+    output_lines: list[str] = []
+    start = time.monotonic()
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except FileNotFoundError:
+        return -1, "", f"Command not found: {cmd[0]}"
+    except Exception as e:
+        return -1, "", str(e)
+
+    try:
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            line = raw_line.strip()
+            if line:
+                output_lines.append(line)
+                progress = _parse_ytdlp_progress(line)
+                if progress is not None:
+                    progress_callback(progress, line)
+            if timeout and time.monotonic() - start > timeout:
+                process.kill()
+                return -1, "\n".join(output_lines), "Command timed out"
+        return process.wait(timeout=5), "\n".join(output_lines), ""
+    except subprocess.TimeoutExpired:
+        process.kill()
+        return -1, "\n".join(output_lines), "Command timed out"
+    except Exception as e:
+        process.kill()
+        return -1, "\n".join(output_lines), str(e)
+
+
+async def download_video(
+    url: str,
+    video_id: str,
+    *,
+    force: bool = False,
+    timeout: int = 300,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+) -> Optional[str]:
     """Download a single video. Skips if merged file already exists."""
     existing = find_merged_file(video_id)
     if existing and not force:
@@ -80,6 +145,8 @@ async def download_video(url: str, video_id: str, *, force: bool = False) -> Opt
         "--no-embed-chapters",
         "--ffmpeg-location", ffmpeg,
     ]
+    if progress_callback:
+        cmd.append("--newline")
 
     if aria2c:
         cmd.extend([
@@ -90,11 +157,22 @@ async def download_video(url: str, video_id: str, *, force: bool = False) -> Opt
         ])
 
     logger.info(f"Downloading: {url}")
-    rc, _, stderr = await asyncio.to_thread(run_command, cmd, timeout=300)
+    if progress_callback:
+        progress_callback(0.01, "Starting download")
+        rc, _, stderr = await asyncio.to_thread(
+            _run_download_command,
+            cmd,
+            timeout=timeout,
+            progress_callback=progress_callback,
+        )
+    else:
+        rc, _, stderr = await asyncio.to_thread(run_command, cmd, timeout=timeout)
     logger.info(f"Download complete: rc={rc}")
 
     merged = find_merged_file(video_id)
     if merged:
+        if progress_callback:
+            progress_callback(1.0, "Download complete")
         _cleanup_fragments(video_id)
         return merged
 

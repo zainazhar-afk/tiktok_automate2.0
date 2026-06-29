@@ -2,8 +2,9 @@ import os
 import subprocess
 import shutil
 import logging
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -155,3 +156,64 @@ def run_command(cmd: list[str], timeout: int = 120, cwd: Optional[str] = None) -
         return -1, "", f"Command not found: {cmd[0]}"
     except Exception as e:
         return -1, "", str(e)
+
+
+def _parse_ffmpeg_time(value: str) -> Optional[float]:
+    try:
+        h, m, s = value.strip().split(":")
+        return int(h) * 3600 + int(m) * 60 + float(s)
+    except (ValueError, AttributeError):
+        return None
+
+
+def run_command_with_progress(
+    cmd: list[str],
+    *,
+    duration: float,
+    progress_callback: Callable[[float], None],
+    timeout: int = 120,
+    cwd: Optional[str] = None,
+) -> tuple[int, str, str]:
+    """Run a command and emit progress from ffmpeg `-progress pipe:1` output."""
+    output_lines: list[str] = []
+    start = time.monotonic()
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=cwd,
+            bufsize=1,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except FileNotFoundError:
+        return -1, "", f"Command not found: {cmd[0]}"
+    except Exception as e:
+        return -1, "", str(e)
+
+    try:
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            line = raw_line.strip()
+            if line:
+                output_lines.append(line)
+            if line.startswith("out_time="):
+                seconds = _parse_ffmpeg_time(line.split("=", 1)[1])
+                if seconds is not None and duration > 0:
+                    progress_callback(max(0.0, min(1.0, seconds / duration)))
+            elif line == "progress=end":
+                progress_callback(1.0)
+
+            if timeout and time.monotonic() - start > timeout:
+                process.kill()
+                return -1, "\n".join(output_lines), "Command timed out"
+
+        rc = process.wait(timeout=5)
+        return rc, "\n".join(output_lines), ""
+    except subprocess.TimeoutExpired:
+        process.kill()
+        return -1, "\n".join(output_lines), "Command timed out"
+    except Exception as e:
+        process.kill()
+        return -1, "\n".join(output_lines), str(e)

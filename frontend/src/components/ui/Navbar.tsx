@@ -21,6 +21,8 @@ export default function Navbar() {
           {[
             { href: "/", label: "Discover" },
             { href: "/bulk", label: "Bulk Edit" },
+            { href: "/editor", label: "Editor" },
+            { href: "/variants", label: "Variants" },
             { href: "/export", label: "Export" },
           ].map((link) => (
             <Link

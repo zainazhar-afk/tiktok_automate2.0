@@ -13,6 +13,10 @@ export default function VideoCard({ video }: VideoCardProps) {
   const isDownloaded = state.downloadedPaths.has(video.id);
   const isDownloading = state.downloadingIds.has(video.id);
   const isProcessed = state.processedPaths.has(video.id);
+  const job =
+    state.jobs.find((j) => j.video_id === video.id && j.status !== "completed") ||
+    state.jobs.find((j) => j.video_id === video.id);
+  const jobProgress = Math.round((job?.progress || 0) * 100);
 
   const durationStr = `${Math.floor(video.duration / 60)}:${(video.duration % 60).toString().padStart(2, "0")}`;
   const viewsStr = video.views
@@ -50,6 +54,22 @@ export default function VideoCard({ video }: VideoCardProps) {
         </span>
 
         {/* Status badges */}
+        {job && (
+          <div className="absolute top-2 left-2 max-w-[70%]">
+            <span
+              className={`block truncate text-[10px] px-1.5 py-0.5 rounded text-white ${
+                job.status === "failed"
+                  ? "bg-red-700/90"
+                  : job.status === "completed"
+                    ? "bg-green-700/90"
+                    : "bg-purple-700/90"
+              }`}
+              title={job.error || job.status}
+            >
+              {job.status} {job.status !== "failed" ? `${jobProgress}%` : ""}
+            </span>
+          </div>
+        )}
         <div className="absolute top-2 right-2 flex flex-col gap-1">
           {isDownloaded && (
             <span className="bg-blue-600/80 text-white text-[10px] px-1.5 py-0.5 rounded">
@@ -74,6 +94,15 @@ export default function VideoCard({ video }: VideoCardProps) {
             <svg className="w-10 h-10 text-purple-400" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
             </svg>
+          </div>
+        )}
+
+        {job && job.status !== "completed" && job.status !== "failed" && (
+          <div className="absolute left-0 right-0 bottom-0 h-1 bg-black/50">
+            <div
+              className="h-full bg-purple-400 transition-all duration-500"
+              style={{ width: `${jobProgress}%` }}
+            />
           </div>
         )}
       </div>

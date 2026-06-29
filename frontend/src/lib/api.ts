@@ -1,10 +1,24 @@
 import { API_URL } from "@/types";
-import type { AntiDetectionConfig, DiscoveryFilters, DiscoveryResult } from "@/types";
+import type {
+  AntiDetectionConfig,
+  AssetLibrary,
+  DiscoveryFilters,
+  DiscoveryResult,
+  SubtitleTrack,
+  TimelineCoverResponse,
+  TimelineQueueJob,
+  TimelineHookResponse,
+  TimelineProject,
+  TimelineRenderResponse,
+  TimelineScoreResponse,
+  TimelineSmartCropResponse,
+  VariantGenerationResponse,
+  VariantSourceStatus,
+  VariantUploadResponse,
+} from "@/types";
 
-export type { AntiDetectionConfig, AntiDetectionLevel, VideoInfo, JobInfo, JobStatus, DiscoveryFilters, ProcessedVideoFile } from "@/types";
+export type { AntiDetectionConfig, AntiDetectionLevel, VideoInfo, JobInfo, JobStatus, DiscoveryFilters, ProcessedVideoFile, AssetLibrary, SubtitleTrack, SubtitleWord, TimelineClip, TimelineCoverResponse, TimelineQueueJob, TimelineHookResponse, TimelineHookSuggestion, TimelineProject, TimelineScoreResponse, TimelineSmartCropResponse, VariantGenerationResponse } from "@/types";
 export { DEFAULT_ANTI_DETECTION, DEFAULT_FILTERS } from "@/types";
-
-type FilterPayload = Partial<DiscoveryFilters> & { page_token?: string };
 
 function filterBody(filters?: Partial<DiscoveryFilters>, pageToken?: string | null) {
   return {
@@ -150,8 +164,242 @@ export async function listVideos(type: "processed" | "downloaded" = "processed")
   return res.json();
 }
 
+export async function listAssets(): Promise<AssetLibrary> {
+  const res = await fetch(`${API_URL}/api/videos/assets`);
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function getSubtitleTrack(videoId: string): Promise<SubtitleTrack> {
+  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}`);
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function saveSubtitleTrack(track: SubtitleTrack): Promise<SubtitleTrack> {
+  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(track.video_id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(track),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function importSubtitleTrack(
+  videoId: string,
+  format: "srt" | "vtt",
+  content: string
+): Promise<SubtitleTrack> {
+  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ format, content }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function exportSubtitleTrack(videoId: string, format: "srt" | "vtt"): Promise<string> {
+  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/export?format=${format}`);
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.text();
+}
+
+export async function translateSubtitleTrack(
+  videoId: string,
+  targetLanguage: string,
+  sourceLanguage = "en"
+): Promise<SubtitleTrack> {
+  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/translate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target_language: targetLanguage, source_language: sourceLanguage }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function renderSubtitleVideo(videoId: string) {
+  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/render`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function getTimelineProject(videoId: string): Promise<TimelineProject> {
+  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(videoId)}`);
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function saveTimelineProject(project: TimelineProject): Promise<TimelineProject> {
+  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(project),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function renderTimelineProject(project: TimelineProject): Promise<TimelineRenderResponse> {
+  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/render`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(project),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function enqueueTimelineRender(project: TimelineProject): Promise<TimelineQueueJob> {
+  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/queue`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function listTimelineQueue(): Promise<{ jobs: TimelineQueueJob[] }> {
+  const res = await fetch(`${API_URL}/api/timeline/queue/jobs`);
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function pauseTimelineQueueJob(jobId: string): Promise<TimelineQueueJob> {
+  const res = await fetch(`${API_URL}/api/timeline/queue/${encodeURIComponent(jobId)}/pause`, { method: "POST" });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function resumeTimelineQueueJob(jobId: string): Promise<TimelineQueueJob> {
+  const res = await fetch(`${API_URL}/api/timeline/queue/${encodeURIComponent(jobId)}/resume`, { method: "POST" });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function retryTimelineQueueJob(jobId: string): Promise<TimelineQueueJob> {
+  const res = await fetch(`${API_URL}/api/timeline/queue/${encodeURIComponent(jobId)}/retry`, { method: "POST" });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function applyTimelineSilenceCuts(project: TimelineProject): Promise<TimelineProject> {
+  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/silence-cuts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function generateTimelineHooks(project: TimelineProject): Promise<TimelineHookResponse> {
+  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/hooks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function generateTimelineCover(
+  project: TimelineProject,
+  headline: string,
+  platform: "tiktok" | "reels" | "shorts" = "tiktok"
+): Promise<TimelineCoverResponse> {
+  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/cover`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project,
+      headline,
+      brand_name: project.brand_name,
+      brand_color: project.brand_primary_color,
+      accent_color: project.brand_accent_color,
+      platform,
+    }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function scoreTimelineProject(project: TimelineProject): Promise<TimelineScoreResponse> {
+  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/score`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function applyTimelineSmartCrop(
+  project: TimelineProject,
+  clipId: string,
+  mode: "face" | "object"
+): Promise<TimelineSmartCropResponse> {
+  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/smart-crop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project, clip_id: clipId, mode, sample_interval: 0.5 }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function uploadVariantSource(file: File): Promise<VariantUploadResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${API_URL}/api/variants/upload`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function createVariantSourceFromUrl(url: string): Promise<VariantUploadResponse> {
+  const res = await fetch(`${API_URL}/api/variants/from-url`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function startVariantSourceFromUrl(url: string): Promise<VariantSourceStatus> {
+  const res = await fetch(`${API_URL}/api/variants/from-url/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function getVariantSourceStatus(uploadId: string): Promise<VariantSourceStatus> {
+  const res = await fetch(`${API_URL}/api/variants/${encodeURIComponent(uploadId)}/source-status`);
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function generateVariants(uploadId: string): Promise<VariantGenerationResponse> {
+  const res = await fetch(`${API_URL}/api/variants/${encodeURIComponent(uploadId)}/generate`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
 export async function deleteVideo(filename: string) {
-  const res = await fetch(`${API_URL}/api/videos/${filename}`, { method: "DELETE" });
+  const res = await fetch(`${API_URL}/api/videos/${encodeURIComponent(filename)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

@@ -48,8 +48,19 @@ def run_pipeline_job(
         job_queue.update_job(job_id, status=JobStatus.PROCESSING, progress=0.6)
         state_store.upsert_video(video_id, status="processing")
 
+        def processing_progress(value: float):
+            progress = 0.6 + max(0.0, min(1.0, value)) * 0.25
+            job_queue.update_job(job_id, status=JobStatus.PROCESSING, progress=progress)
+
         config = AntiDetectionConfig(**config_dict)
-        output = _run_async(processor.process_video(path, video_id, config))
+        output = _run_async(
+            processor.process_video(
+                path,
+                video_id,
+                config,
+                progress_callback=processing_progress,
+            )
+        )
         if not output:
             raise RuntimeError("Processing failed")
 

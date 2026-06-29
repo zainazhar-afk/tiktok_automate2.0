@@ -1,6 +1,15 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export type AntiDetectionLevel = "mild" | "moderate" | "aggressive";
+export type TextRemovalMode = "blur" | "cover" | "crop";
+
+export interface TextRemovalRegion {
+  x_pct: number;
+  y_pct: number;
+  w_pct: number;
+  h_pct: number;
+  mode?: TextRemovalMode | null;
+}
 
 export interface AntiDetectionConfig {
   level: AntiDetectionLevel;
@@ -14,6 +23,11 @@ export interface AntiDetectionConfig {
   audio_segment_reversal: boolean;
   remove_watermark: boolean;
   remove_text_overlays: boolean;
+  remove_top_text_banner: boolean;
+  text_removal_mode: TextRemovalMode;
+  top_text_height_pct: number;
+  bottom_text_height_pct: number;
+  text_removal_regions: TextRemovalRegion[];
   speed_variation: boolean;
   horizontal_flip: boolean;
   rotation_jitter: boolean;
@@ -41,6 +55,11 @@ export const DEFAULT_ANTI_DETECTION: AntiDetectionConfig = {
   audio_segment_reversal: false,
   remove_watermark: true,
   remove_text_overlays: true,
+  remove_top_text_banner: false,
+  text_removal_mode: "blur",
+  top_text_height_pct: 0.14,
+  bottom_text_height_pct: 0.15,
+  text_removal_regions: [],
   speed_variation: false,
   horizontal_flip: false,
   rotation_jitter: false,
@@ -161,4 +180,203 @@ export interface ProcessedVideoFile {
   caption?: string;
   hashtags?: string[];
   cover_filename?: string | null;
+}
+
+export interface AssetLibrary {
+  music: string[];
+  voiceover: string[];
+}
+
+export interface SubtitleWord {
+  id: string;
+  text: string;
+  start: number;
+  end: number;
+  highlighted: boolean;
+}
+
+export interface SubtitleTrack {
+  video_id: string;
+  language: string;
+  style: "default" | "bold" | "minimal" | "neon";
+  position: "top" | "middle" | "bottom";
+  animation: "none" | "pop" | "slide" | "karaoke";
+  transcript: string;
+  words: SubtitleWord[];
+  updated_at?: string | null;
+}
+
+export interface TimelineCropKeyframe {
+  time: number;
+  x_pct: number;
+  y_pct: number;
+  w_pct: number;
+  h_pct: number;
+}
+
+export interface TimelineClip {
+  id: string;
+  title: string;
+  source_start: number;
+  source_end: number;
+  muted: boolean;
+  crop_mode: "center" | "face" | "object" | "manual" | "split";
+  layout: "single" | "split";
+  x_pct: number;
+  y_pct: number;
+  w_pct: number;
+  h_pct: number;
+  keyframes: TimelineCropKeyframe[];
+  broll_source?: string | null;
+  broll_mode: "none" | "cover" | "pip" | "split";
+  broll_start: number;
+  auto_zoom: boolean;
+  zoom_strength: number;
+}
+
+export interface TimelineProject {
+  video_id: string;
+  clips: TimelineClip[];
+  crop_mode: "center" | "face" | "object" | "manual" | "split";
+  keep_face_centered: boolean;
+  split_layout: "speaker_gameplay";
+  jump_cut_cleanup: boolean;
+  auto_captions: boolean;
+  hook_title: string;
+  hook_subtitle: string;
+  brand_template: "none" | "creator" | "product" | "podcast";
+  brand_name: string;
+  brand_primary_color: string;
+  brand_accent_color: string;
+  updated_at?: string | null;
+}
+
+export interface TimelineRenderResponse {
+  video_id: string;
+  output_path: string;
+  filename: string;
+}
+
+export interface TimelineHookSuggestion {
+  title: string;
+  subtitle: string;
+  angle: string;
+  confidence: number;
+}
+
+export interface TimelineHookResponse {
+  suggestions: TimelineHookSuggestion[];
+  provider: string;
+}
+
+export interface TimelineSmartCropResponse {
+  project: TimelineProject;
+  clip_id: string;
+  mode: "face" | "object";
+  keyframes: number;
+  detections: number;
+  frames_analyzed: number;
+  confidence: number;
+  tracker: string;
+  message: string;
+}
+
+export interface TimelineQueueJob {
+  job_id: string;
+  video_id: string;
+  title: string;
+  status: "queued" | "running" | "paused" | "completed" | "failed";
+  progress: number;
+  message: string;
+  error: string;
+  source_filename?: string | null;
+  output_filename?: string | null;
+  pause_requested: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TimelineCoverResponse {
+  video_id: string;
+  cover_filename: string;
+  output_path: string;
+  selected_time: number;
+  platform: "tiktok" | "reels" | "shorts";
+}
+
+export interface ClipScoreMetric {
+  label: string;
+  value: number;
+  detail: string;
+}
+
+export interface TimelineClipScore {
+  clip_id: string;
+  title: string;
+  overall: number;
+  metrics: ClipScoreMetric[];
+  reasons: string[];
+}
+
+export interface TimelineScoreResponse {
+  video_id: string;
+  scores: TimelineClipScore[];
+  analysis: {
+    silence_segments?: number;
+    scene_changes?: number;
+    transcript_words?: number;
+  };
+}
+
+export interface VariantUploadResponse {
+  upload_id: string;
+  filename: string;
+}
+
+export interface VariantSourceStatus {
+  upload_id: string;
+  url: string;
+  filename: string;
+  status: "queued" | "downloading" | "completed" | "failed";
+  progress: number;
+  message: string;
+  error: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface VariantSpec {
+  id: string;
+  title: string;
+  hook: string;
+  start: number;
+  end: number;
+  angle: string;
+  compliance_note: string;
+  score: number;
+  reasons: string[];
+  transcript_excerpt: string;
+  source_signals: string[];
+}
+
+export interface VariantFile extends VariantSpec {
+  filename: string;
+  output_path: string;
+}
+
+export interface VariantGenerationResponse {
+  upload_id: string;
+  ai_planned: boolean;
+  variants: VariantSpec[];
+  files: VariantFile[];
+  analysis: {
+    duration?: number;
+    transcript_available?: boolean;
+    transcript_cues?: number;
+    silence_segments?: number;
+    scene_changes?: number;
+    candidate_count?: number;
+    planner?: string;
+    signals?: string[];
+  };
 }

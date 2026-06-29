@@ -2,7 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import youtube, videos, process, events, state
+from app.api import youtube, videos, process, events, state, editor, timeline, variants
+from app.services import state_store
 from app.services.state_store import init_db
 from app.utils.helpers import find_ffmpeg, find_ytdlp, find_aria2c
 from app.config import get_settings
@@ -33,6 +34,9 @@ app.include_router(videos.router, prefix="/api/videos", tags=["Videos"])
 app.include_router(process.router, prefix="/api/process", tags=["Processing"])
 app.include_router(events.router, prefix="/api/events", tags=["Events"])
 app.include_router(state.router, prefix="/api/state", tags=["State"])
+app.include_router(editor.router, prefix="/api/editor", tags=["Editor"])
+app.include_router(timeline.router, prefix="/api/timeline", tags=["Timeline"])
+app.include_router(variants.router, prefix="/api/variants", tags=["Variants"])
 
 
 @app.get("/api/health")
@@ -46,6 +50,14 @@ async def health():
             "yt_dlp": bool(find_ytdlp()),
             "aria2c": bool(find_aria2c()),
             "youtube_api": bool(settings.youtube_api_key),
+            "google_ai_keys": len(settings.google_ai_api_keys),
+            "groq_keys": len(settings.groq_api_keys),
+            "groq_chat_model": settings.groq_chat_model,
+            "groq_transcription_model": settings.groq_transcription_model,
+            "deepgram_keys": len(settings.deepgram_api_keys),
+            "transcription_provider": settings.transcription_provider,
+            "supabase": bool(settings.supabase_url and settings.supabase_secret_key),
+            "state_store": state_store.backend_status(),
         },
         "concurrency": {
             "download": settings.max_download_concurrent,

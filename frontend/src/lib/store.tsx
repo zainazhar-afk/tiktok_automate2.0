@@ -63,6 +63,7 @@ type Action =
   | { type: "SELECT_ALL"; payload: string[] }
   | { type: "DESELECT_ALL" }
   | { type: "SET_DOWNLOADING"; payload: string[] }
+  | { type: "DOWNLOAD_SETTLED"; payload: string }
   | { type: "DOWNLOAD_COMPLETE"; payload: { videoId: string; path: string } }
   | { type: "DOWNLOAD_FAILED"; payload: string }
   | { type: "SET_PROCESSING"; payload: string[] }
@@ -115,6 +116,11 @@ function reducer(state: AppState, action: Action): AppState {
       const next = new Set(state.downloadingIds);
       action.payload.forEach((id) => next.add(id));
       return { ...state, downloadingIds: next };
+    }
+    case "DOWNLOAD_SETTLED": {
+      const downloading = new Set(state.downloadingIds);
+      downloading.delete(action.payload);
+      return { ...state, downloadingIds: downloading };
     }
     case "DOWNLOAD_COMPLETE": {
       const downloading = new Set(state.downloadingIds);
@@ -191,11 +197,14 @@ interface AppContextValue {
   applyFilters: () => Promise<void>;
   downloadSelected: () => Promise<void>;
   processSelected: () => Promise<void>;
+  processAllDownloaded: () => Promise<void>;
   runPipeline: () => Promise<void>;
+  retryFailedJobs: () => Promise<void>;
   toggleSelect: (id: string) => void;
   selectAll: () => void;
   deselectAll: () => void;
   setAntiDetection: (config: Partial<AntiDetectionConfig>) => void;
+  clearError: () => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -203,7 +212,10 @@ const AppContext = createContext<AppContextValue | null>(null);
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
-  stateRef.current = state;
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   // Remember the last discovery action so filter changes can re-run it.
   const lastDiscoveryRef = useRef<{ type: "trending" | "search" | "hashtag" | "competitor"; query?: string }>({
@@ -248,30 +260,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     persistState(state);
-  }, [state.downloadedPaths, state.processedPaths, state.filters, state.antiDetection]);
+  }, [state]);
 
   useEffect(() => {
-    const { subscribeEvents } = require("@/lib/api");
-    const unsub = subscribeEvents((event: unknown) => {
-      const ev = event as { type?: string; data?: JobInfo & { jobs?: JobInfo[] } };
-      if (ev?.type === "job_update" && ev.data?.job_id) {
-        dispatch({ type: "UPDATE_JOB", payload: ev.data });
-        const job = ev.data;
-        if (job.status === "completed" && job.output_path) {
-          dispatch({
-            type: "PROCESS_COMPLETE",
-            payload: { videoId: job.video_id, path: job.output_path },
-          });
+    let unsub: (() => void) | undefined;
+    import("@/lib/api").then(({ subscribeEvents }) => {
+      unsub = subscribeEvents((event: unknown) => {
+        const ev = event as { type?: string; data?: JobInfo & { jobs?: JobInfo[] } };
+        if (ev?.type === "job_update" && ev.data?.job_id) {
+          dispatch({ type: "UPDATE_JOB", payload: ev.data });
+          const job = ev.data;
+          if (job.status === "completed" && job.output_path) {
+            dispatch({ type: "DOWNLOAD_SETTLED", payload: job.video_id });
+            dispatch({
+              type: "PROCESS_COMPLETE",
+              payload: { videoId: job.video_id, path: job.output_path },
+            });
+          }
+          if (job.status === "downloading") {
+            dispatch({ type: "SET_DOWNLOADING", payload: [job.video_id] });
+          }
+          if (job.status === "processing") {
+            dispatch({ type: "DOWNLOAD_SETTLED", payload: job.video_id });
+            dispatch({ type: "SET_PROCESSING", payload: [job.video_id] });
+          }
+          if (job.status === "failed") {
+            dispatch({ type: "DOWNLOAD_SETTLED", payload: job.video_id });
+            dispatch({ type: "PROCESS_FAILED", payload: job.video_id });
+          }
         }
-        if (job.status === "downloading") {
-          dispatch({ type: "SET_DOWNLOADING", payload: [job.video_id] });
+        if (ev?.type === "jobs_snapshot" && ev.data?.jobs) {
+          dispatch({ type: "SET_JOBS", payload: ev.data.jobs });
         }
-      }
-      if (ev?.type === "jobs_snapshot" && ev.data?.jobs) {
-        dispatch({ type: "SET_JOBS", payload: ev.data.jobs });
-      }
+      });
     });
-    return unsub;
+    return () => unsub?.();
   }, []);
 
   const setFilters = useCallback((filters: Partial<DiscoveryFilters>) => {
@@ -386,12 +409,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const processSelected = useCallback(async () => {
-    const ids = Array.from(stateRef.current.downloadedPaths.keys());
+  const processDownloadedIds = useCallback(async (ids: string[]) => {
     if (!ids.length) return;
 
     dispatch({ type: "SET_PROCESSING", payload: ids });
     const { processVideo, syncState } = await import("@/lib/api");
+    const completed: {
+      video_id: string;
+      status: string;
+      output_path: string;
+      title?: string;
+      channel?: string;
+    }[] = [];
     const batchSize = 4;
     for (let i = 0; i < ids.length; i += batchSize) {
       const batch = ids.slice(i, i + batchSize);
@@ -409,47 +438,89 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               type: "PROCESS_COMPLETE",
               payload: { videoId: id, path: result.output_path },
             });
+            completed.push({
+              video_id: id,
+              status: "completed",
+              output_path: result.output_path,
+              title: video?.title,
+              channel: video?.channel,
+            });
           } catch {
             dispatch({ type: "PROCESS_FAILED", payload: id });
           }
         })
       );
     }
-    await syncState(
-      ids.map((id) => ({
-        video_id: id,
-        status: "completed",
-        output_path: stateRef.current.processedPaths.get(id),
-      }))
+    if (completed.length) await syncState(completed);
+  }, []);
+
+  const processSelected = useCallback(async () => {
+    const ids = Array.from(stateRef.current.downloadedPaths.keys()).filter((id) =>
+      stateRef.current.selectedVideoIds.has(id)
     );
+    await processDownloadedIds(ids);
+  }, [processDownloadedIds]);
+
+  const processAllDownloaded = useCallback(async () => {
+    await processDownloadedIds(Array.from(stateRef.current.downloadedPaths.keys()));
+  }, [processDownloadedIds]);
+
+  const enqueuePipelineForIds = useCallback(async (ids: string[]) => {
+    if (!ids.length) return;
+
+    const videoMeta = Object.fromEntries(
+      ids.map((id) => {
+        const video = stateRef.current.discoveredVideos.find((v) => v.id === id);
+        const job = stateRef.current.jobs.find((j) => j.video_id === id);
+        return [
+          id,
+          {
+            url: video?.url,
+            title: video?.title || job?.title,
+            channel: video?.channel || job?.channel,
+            description: video?.description,
+            tags: video?.tags,
+          },
+        ];
+      })
+    );
+
+    const { pipelineProcess } = await import("@/lib/api");
+    const result = await pipelineProcess(
+      ids,
+      stateRef.current.antiDetection,
+      videoMeta,
+      4
+    );
+    dispatch({ type: "SET_JOBS", payload: result.jobs || [] });
   }, []);
 
   const runPipeline = useCallback(async () => {
-    const selectedVideos = stateRef.current.discoveredVideos.filter((v) =>
-      stateRef.current.selectedVideoIds.has(v.id)
-    );
-    if (!selectedVideos.length) return;
-
-    const videoMeta = Object.fromEntries(
-      selectedVideos.map((v) => [
-        v.id,
-        { url: v.url, title: v.title, channel: v.channel, description: v.description, tags: v.tags },
-      ])
-    );
-
     try {
-      const { pipelineProcess } = await import("@/lib/api");
-      const result = await pipelineProcess(
-        selectedVideos.map((v) => v.id),
-        stateRef.current.antiDetection,
-        videoMeta,
-        4
+      await enqueuePipelineForIds(
+        stateRef.current.discoveredVideos
+          .filter((v) => stateRef.current.selectedVideoIds.has(v.id))
+          .map((v) => v.id)
       );
-      dispatch({ type: "SET_JOBS", payload: result.jobs || [] });
     } catch (e: unknown) {
       dispatch({ type: "SET_ERROR", payload: e instanceof Error ? e.message : String(e) });
     }
-  }, []);
+  }, [enqueuePipelineForIds]);
+
+  const retryFailedJobs = useCallback(async () => {
+    const ids = Array.from(
+      new Set(
+        stateRef.current.jobs
+          .filter((job) => job.status === "failed")
+          .map((job) => job.video_id)
+      )
+    );
+    try {
+      await enqueuePipelineForIds(ids);
+    } catch (e: unknown) {
+      dispatch({ type: "SET_ERROR", payload: e instanceof Error ? e.message : String(e) });
+    }
+  }, [enqueuePipelineForIds]);
 
   const toggleSelect = useCallback((id: string) => dispatch({ type: "TOGGLE_SELECT", payload: id }), []);
   const selectAll = useCallback(() => {
@@ -460,6 +531,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (config: Partial<AntiDetectionConfig>) => dispatch({ type: "SET_ANTI_DETECTION", payload: config }),
     []
   );
+  const clearError = useCallback(() => dispatch({ type: "CLEAR_ERROR" }), []);
 
   return (
     <AppContext.Provider
@@ -473,11 +545,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         applyFilters,
         downloadSelected,
         processSelected,
+        processAllDownloaded,
         runPipeline,
+        retryFailedJobs,
         toggleSelect,
         selectAll,
         deselectAll,
         setAntiDetection,
+        clearError,
       }}
     >
       {children}
