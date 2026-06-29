@@ -188,6 +188,10 @@ class SubtitleTranscribeRequest(BaseModel):
     force: bool = True
 
 
+class SubtitleApplyTranscriptRequest(BaseModel):
+    track: SubtitleTrack
+
+
 class SubtitleTranslateRequest(BaseModel):
     target_language: str
     source_language: str = "en"

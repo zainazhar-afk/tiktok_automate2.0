@@ -43,3 +43,36 @@ def test_save_track_persists_words(tmp_path, monkeypatch):
     assert saved["video_id"] == "abc_123"
     assert saved["style"] == "neon"
     assert saved["words"][0]["highlighted"] is True
+
+
+def test_apply_transcript_rebuilds_words_and_sidecars(tmp_path, monkeypatch):
+    db_path = tmp_path / "state.db"
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    monkeypatch.setattr(state_store, "DB_PATH", str(db_path))
+    monkeypatch.setattr(subtitle_editor, "OUTPUT_DIR", str(output_dir))
+    state_store.init_db()
+
+    track = SubtitleTrack(
+        video_id="abc_123",
+        language="ur",
+        style="bold",
+        position="bottom",
+        animation="none",
+        transcript="one two three four",
+        words=[
+            {"id": "w1", "text": "old", "start": 1.0, "end": 2.0, "highlighted": True},
+            {"id": "w2", "text": "text", "start": 3.0, "end": 5.0, "highlighted": False},
+        ],
+    )
+
+    saved = subtitle_editor.apply_transcript(track)
+
+    assert saved["language"] == "ur"
+    assert saved["style"] == "bold"
+    assert [word["text"] for word in saved["words"]] == ["one", "two", "three", "four"]
+    assert saved["words"][0]["start"] == 1.0
+    assert saved["words"][-1]["end"] == 5.0
+    assert saved["words"][0]["highlighted"] is True
+    assert (output_dir / "abc_123_edited.srt").exists()
+    assert (output_dir / "abc_123_edited.vtt").exists()

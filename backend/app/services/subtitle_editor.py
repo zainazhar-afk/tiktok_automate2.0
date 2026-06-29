@@ -165,6 +165,69 @@ def _default_words(text: str) -> list[dict]:
     return words
 
 
+def _transcript_parts(text: str) -> list[str]:
+    return re.findall(r"\S+", text.strip())
+
+
+def _word_boundaries(words: list[dict]) -> list[float]:
+    sorted_words = sorted(words, key=lambda w: (float(w.get("start", 0)), float(w.get("end", 0))))
+    if not sorted_words:
+        return []
+    boundaries = [float(sorted_words[0].get("start", 0.0) or 0.0)]
+    for prev, current in zip(sorted_words, sorted_words[1:]):
+        prev_end = float(prev.get("end", prev.get("start", 0.0) + 0.3) or 0.0)
+        current_start = float(current.get("start", prev_end) or prev_end)
+        boundaries.append(max(boundaries[-1], (prev_end + current_start) / 2))
+    last = sorted_words[-1]
+    last_start = float(last.get("start", boundaries[-1]) or boundaries[-1])
+    last_end = float(last.get("end", last_start + 0.3) or last_start + 0.3)
+    boundaries.append(max(boundaries[-1] + 0.12, last_end))
+    return boundaries
+
+
+def _interpolate_boundaries(boundaries: list[float], position: float) -> float:
+    if not boundaries:
+        return max(0.0, position * 0.45)
+    if len(boundaries) == 1:
+        return boundaries[0]
+    position = max(0.0, min(1.0, position))
+    scaled = position * (len(boundaries) - 1)
+    lower = int(scaled)
+    upper = min(lower + 1, len(boundaries) - 1)
+    frac = scaled - lower
+    return boundaries[lower] + (boundaries[upper] - boundaries[lower]) * frac
+
+
+def _align_transcript_words(transcript: str, existing_words: list[dict]) -> list[dict]:
+    parts = _transcript_parts(transcript)
+    if not parts:
+        return []
+    existing = sorted(existing_words or [], key=lambda w: (float(w.get("start", 0)), float(w.get("end", 0))))
+    boundaries = _word_boundaries(existing)
+    if not boundaries:
+        boundaries = [idx * 0.45 for idx in range(len(parts) + 1)]
+
+    new_words: list[dict] = []
+    existing_count = len(existing)
+    total = len(parts)
+    for idx, text in enumerate(parts):
+        start = _interpolate_boundaries(boundaries, idx / total)
+        end = _interpolate_boundaries(boundaries, (idx + 1) / total)
+        if end <= start:
+            end = start + 0.2
+
+        existing_idx = min(existing_count - 1, round(idx * max(existing_count - 1, 0) / max(total - 1, 1))) if existing_count else -1
+        existing_word = existing[existing_idx] if existing_idx >= 0 else {}
+        new_words.append({
+            "id": existing_word.get("id") or uuid.uuid4().hex[:10],
+            "text": text,
+            "start": round(max(0.0, start), 3),
+            "end": round(max(start + 0.12, end), 3),
+            "highlighted": bool(existing_word.get("highlighted", False)),
+        })
+    return new_words
+
+
 def _track_from_words(video_id: str, words: list[dict], language: str = "en") -> dict:
     now = datetime.now(timezone.utc).isoformat()
     return {
@@ -264,6 +327,27 @@ def save_track(track: SubtitleTrack) -> dict:
     data["transcript"] = data.get("transcript") or " ".join(w["text"] for w in data.get("words", []))
     state_store.save_subtitle_track(video_id, data)
     return state_store.get_subtitle_track(video_id) or data
+
+
+def apply_transcript(track: SubtitleTrack) -> dict:
+    video_id = _safe_video_id(track.video_id)
+    data = track.model_dump()
+    transcript = data.get("transcript", "").strip()
+    words = _align_transcript_words(transcript, data.get("words", []))
+    if not words:
+        raise ValueError("Transcript is empty")
+
+    data["video_id"] = video_id
+    data["words"] = words
+    data["transcript"] = " ".join(word["text"] for word in words).strip()
+    data["style"] = data.get("style") if data.get("style") in SUPPORTED_STYLES else "default"
+    data["position"] = data.get("position") if data.get("position") in SUPPORTED_POSITIONS else "bottom"
+    data["animation"] = data.get("animation") if data.get("animation") in SUPPORTED_ANIMATIONS else "none"
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    state_store.save_subtitle_track(video_id, data)
+    saved = state_store.get_subtitle_track(video_id) or data
+    write_sidecars(saved)
+    return saved
 
 
 def import_track(video_id: str, content: str, fmt: str) -> dict:

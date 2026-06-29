@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { API_URL } from "@/types";
 import type { ProcessedVideoFile, SubtitleTrack, SubtitleWord } from "@/types";
 import {
+  applySubtitleTranscript,
   exportSubtitleTrack,
   getSubtitleTrack,
   importSubtitleTrack,
@@ -71,10 +72,6 @@ function downloadText(filename: string, text: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
-function normalizedWords(text: string) {
-  return text.trim().split(/\s+/).filter(Boolean);
-}
-
 export default function SubtitleEditor() {
   const params = useSearchParams();
   const requestedVideo = params.get("video");
@@ -85,6 +82,7 @@ export default function SubtitleEditor() {
   const [saving, setSaving] = useState(false);
   const [rendering, setRendering] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [applyingTranscript, setApplyingTranscript] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [keywordInput, setKeywordInput] = useState("");
@@ -185,23 +183,6 @@ export default function SubtitleEditor() {
     });
   };
 
-  const applyTranscript = () => {
-    if (!track) return;
-    const parts = normalizedWords(track.transcript);
-    if (!parts.length) return;
-    const start = track.words[0]?.start || 0;
-    const end = track.words[track.words.length - 1]?.end || Math.max(2, parts.length * 0.45);
-    const step = Math.max(0.2, (end - start) / parts.length);
-    const words = parts.map((text, idx) => ({
-      id: track.words[idx]?.id || crypto.randomUUID().slice(0, 10),
-      text,
-      start: Number((start + idx * step).toFixed(3)),
-      end: Number((start + (idx + 1) * step).toFixed(3)),
-      highlighted: track.words[idx]?.highlighted || false,
-    }));
-    setTrackPatch({ words, transcript: parts.join(" ") });
-  };
-
   const highlightKeywords = () => {
     if (!track) return;
     const terms = keywordInput
@@ -214,6 +195,24 @@ export default function SubtitleEditor() {
       highlighted: terms.some((term) => word.text.toLowerCase().replace(/[^\w]/g, "").includes(term)),
     }));
     setTrackPatch({ words });
+  };
+
+  const handleApplyTranscript = async () => {
+    if (!track || !track.transcript.trim()) return;
+    setApplyingTranscript(true);
+    setError(null);
+    try {
+      const applied = await applySubtitleTranscript(track);
+      setTrack({
+        ...applied,
+        transcript: applied.transcript || applied.words.map((word) => word.text).join(" "),
+      });
+      setMessage(`Applied transcript to ${applied.words.length} timed words`);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setApplyingTranscript(false);
+    }
   };
 
   const handleSave = async () => {
@@ -457,11 +456,11 @@ export default function SubtitleEditor() {
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
-                  onClick={applyTranscript}
-                  disabled={!track}
+                  onClick={handleApplyTranscript}
+                  disabled={!track || applyingTranscript}
                   className="rounded bg-gray-700 px-3 py-2 text-xs text-white hover:bg-gray-600 disabled:opacity-40"
                 >
-                  Apply transcript
+                  {applyingTranscript ? "Applying..." : "Apply transcript"}
                 </button>
                 <button
                   onClick={() => handleExport("srt")}

@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
 
 from app.models.schemas import (
+    SubtitleApplyTranscriptRequest,
     SubtitleImportRequest,
     SubtitleRenderResponse,
     SubtitleTranscribeRequest,
@@ -61,6 +62,16 @@ async def transcribe_subtitle_track(video_id: str, req: SubtitleTranscribeReques
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.post("/subtitles/{video_id}/apply")
+async def apply_subtitle_transcript(video_id: str, req: SubtitleApplyTranscriptRequest):
+    if video_id != req.track.video_id:
+        raise HTTPException(status_code=400, detail="video id mismatch")
+    try:
+        return subtitle_editor.apply_transcript(req.track)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/subtitles/{video_id}/export")
