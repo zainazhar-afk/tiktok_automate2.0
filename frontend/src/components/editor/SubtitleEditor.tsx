@@ -12,6 +12,7 @@ import {
   listVideos,
   renderSubtitleVideo,
   saveSubtitleTrack,
+  transcribeSubtitleTrack,
   translateSubtitleTrack,
 } from "@/lib/api";
 
@@ -61,6 +62,7 @@ export default function SubtitleEditor() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [rendering, setRendering] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [keywordInput, setKeywordInput] = useState("");
@@ -93,7 +95,10 @@ export default function SubtitleEditor() {
     setError(null);
     try {
       const data = await getSubtitleTrack(videoId);
-      setTrack(data);
+      setTrack({
+        ...data,
+        transcript: data.transcript || (data.words || []).map((word) => word.text).join(" "),
+      });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -212,6 +217,24 @@ export default function SubtitleEditor() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleTranscribe = async () => {
+    if (!activeId) return;
+    setTranscribing(true);
+    setError(null);
+    try {
+      const transcribed = await transcribeSubtitleTrack(activeId);
+      setTrack({
+        ...transcribed,
+        transcript: transcribed.transcript || transcribed.words.map((word) => word.text).join(" "),
+      });
+      setMessage(`Generated transcript with ${transcribed.words.length} words`);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTranscribing(false);
     }
   };
 
@@ -365,6 +388,13 @@ export default function SubtitleEditor() {
                 className="h-40 w-full resize-none rounded border border-gray-700 bg-gray-950 p-3 text-sm text-gray-200 focus:border-purple-500 focus:outline-none disabled:opacity-50"
               />
               <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  onClick={handleTranscribe}
+                  disabled={!activeId || transcribing}
+                  className="rounded bg-purple-700 px-3 py-2 text-xs text-white hover:bg-purple-600 disabled:opacity-40"
+                >
+                  {transcribing ? "Transcribing..." : "Generate transcript"}
+                </button>
                 <button
                   onClick={applyTranscript}
                   disabled={!track}

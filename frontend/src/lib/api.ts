@@ -186,6 +186,14 @@ export async function saveSubtitleTrack(track: SubtitleTrack): Promise<SubtitleT
   return res.json();
 }
 
+export async function transcribeSubtitleTrack(videoId: string): Promise<SubtitleTrack> {
+  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/transcribe`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
 export async function importSubtitleTrack(
   videoId: string,
   format: "srt" | "vtt",

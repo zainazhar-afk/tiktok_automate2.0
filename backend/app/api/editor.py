@@ -44,6 +44,18 @@ async def import_subtitle_track(video_id: str, req: SubtitleImportRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/subtitles/{video_id}/transcribe")
+async def transcribe_subtitle_track(video_id: str):
+    try:
+        return await subtitle_editor.transcribe_track(video_id, force=True)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 @router.get("/subtitles/{video_id}/export")
 async def export_subtitle_track(video_id: str, format: str = "srt"):
     fmt = format.lower()

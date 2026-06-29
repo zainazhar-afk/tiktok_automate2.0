@@ -11,7 +11,7 @@ from typing import Optional
 import httpx
 
 from app.models.schemas import SubtitleTrack
-from app.services import state_store
+from app.services import state_store, subtitles
 from app.utils.helpers import find_ffmpeg, run_command
 
 OUTPUT_DIR = os.path.abspath("output")
@@ -196,6 +196,37 @@ def get_or_create_track(video_id: str) -> dict:
     video = state_store.get_video(video_id) or {}
     fallback_text = video.get("caption") or video.get("title") or "Edit your captions"
     track = _track_from_words(video_id, _default_words(fallback_text))
+    state_store.save_subtitle_track(video_id, track)
+    return state_store.get_subtitle_track(video_id) or track
+
+
+async def transcribe_track(video_id: str, force: bool = True) -> dict:
+    video_id = _safe_video_id(video_id)
+    source = source_video_path(video_id)
+    if not source:
+        raise FileNotFoundError("Processed video not found")
+
+    srt_path = os.path.join(OUTPUT_DIR, f"{video_id}.srt")
+    if force or not os.path.exists(srt_path):
+        generated = await subtitles.generate_subtitles(source, video_id)
+        if not generated:
+            raise RuntimeError(
+                "Transcript generation failed. Check Groq/Deepgram keys or install faster-whisper."
+            )
+        srt_path = generated
+
+    with open(srt_path, "r", encoding="utf-8") as f:
+        words = cues_to_words(parse_subtitle_text(f.read(), "srt"))
+    if not words:
+        raise RuntimeError("Transcript generation produced no words")
+
+    existing = state_store.get_subtitle_track(video_id) or {}
+    track = _track_from_words(video_id, words, existing.get("language", "en"))
+    track.update({
+        "style": existing.get("style", "default"),
+        "position": existing.get("position", "bottom"),
+        "animation": existing.get("animation", "none"),
+    })
     state_store.save_subtitle_track(video_id, track)
     return state_store.get_subtitle_track(video_id) or track
 
