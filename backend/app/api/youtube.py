@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException
 
-from app.models.schemas import SearchRequest, DiscoverRequest, BatchDownloadRequest
+from app.models.schemas import SearchRequest, DiscoverRequest, BatchDownloadRequest, DownloadRequest
 from app.services import discovery, downloader
+from app.services.safety import safe_id, validate_public_video_url
 from app.services.youtube_api import QuotaExceededError
 
 router = APIRouter()
@@ -61,15 +62,12 @@ async def discover_content(req: DiscoverRequest):
 
 
 @router.post("/download")
-async def download_video(req: dict):
-    url = req.get("url")
-    video_id = req.get("video_id")
-    force = req.get("force", False)
-    if not url or not video_id:
-        raise HTTPException(status_code=400, detail="url and video_id required")
+async def download_video(req: DownloadRequest):
+    url = validate_public_video_url(req.url)
+    video_id = safe_id(req.video_id, "video id")
 
     existed_before = bool(downloader.find_merged_file(video_id))
-    path = await downloader.download_video(url, video_id, force=force)
+    path = await downloader.download_video(url, video_id, force=req.force)
     if not path:
         raise HTTPException(status_code=500, detail="Download failed — check ffmpeg is installed")
 
@@ -77,13 +75,13 @@ async def download_video(req: dict):
         "video_id": video_id,
         "path": path,
         "status": "downloaded",
-        "skipped": bool(existed_before and not force),
+        "skipped": bool(existed_before and not req.force),
     }
 
 
 @router.post("/batch-download")
 async def batch_download(req: BatchDownloadRequest):
-    videos = [(v.url, v.video_id) for v in req.videos]
+    videos = [(validate_public_video_url(v.url), safe_id(v.video_id, "video id")) for v in req.videos]
     results = await downloader.batch_download(videos, req.max_concurrent)
     successful = {k: v for k, v in results.items() if v is not None}
     failed = [k for k, v in results.items() if v is None]
@@ -97,6 +95,7 @@ async def batch_download(req: BatchDownloadRequest):
 
 @router.get("/download/{video_id}")
 async def check_download(video_id: str):
+    video_id = safe_id(video_id, "video id")
     path = downloader.find_merged_file(video_id)
     if path:
         return {"video_id": video_id, "exists": True, "path": path}

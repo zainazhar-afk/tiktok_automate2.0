@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { API_URL } from "@/types";
 import type { ProcessedVideoFile, SubtitleTrack, SubtitleWord } from "@/types";
+import { useAuth } from "@/lib/auth";
 import {
   applySubtitleTranscript,
   exportSubtitleTrack,
@@ -16,6 +16,7 @@ import {
   transcribeSubtitleTrack,
   translateSubtitleTrack,
   type TranscriptionProvider,
+  videoFileUrl,
 } from "@/lib/api";
 
 const EMOJIS = ["🔥", "✨", "👇", "💡", "✅", "⚡"];
@@ -74,6 +75,7 @@ function downloadText(filename: string, text: string, type: string) {
 
 export default function SubtitleEditor() {
   const params = useSearchParams();
+  const { accessToken } = useAuth();
   const requestedVideo = params.get("video");
   const [videos, setVideos] = useState<ProcessedVideoFile[]>([]);
   const [activeId, setActiveId] = useState<string>(requestedVideo || "");
@@ -386,7 +388,7 @@ export default function SubtitleEditor() {
               {activeVideo ? (
                 <div className="relative h-full w-full">
                   <video
-                    src={`${API_URL}/api/videos/file/${encodeURIComponent(activeVideo.filename)}`}
+                    src={videoFileUrl(activeVideo.filename, accessToken)}
                     controls
                     className="h-full w-full object-contain"
                     preload="metadata"

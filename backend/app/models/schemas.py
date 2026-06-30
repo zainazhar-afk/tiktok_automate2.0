@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from enum import Enum
+
+from app.services.safety import safe_asset_filename, safe_id
 
 
 class AntiDetectionLevel(str, Enum):
@@ -62,6 +64,11 @@ class AntiDetectionConfig(BaseModel):
     auto_subtitles: bool = False
     subtitle_style: str = "default"          # default | bold | minimal
 
+    @field_validator("background_music", "voiceover_path")
+    @classmethod
+    def validate_asset_filename(cls, value: Optional[str]) -> Optional[str]:
+        return safe_asset_filename(value)
+
 
 class VideoInfo(BaseModel):
     id: str
@@ -80,11 +87,17 @@ class VideoInfo(BaseModel):
 class DownloadRequest(BaseModel):
     url: str
     video_id: str
+    force: bool = False
+
+    @field_validator("video_id")
+    @classmethod
+    def validate_video_id(cls, value: str) -> str:
+        return safe_id(value, "video id")
 
 
 class BatchDownloadRequest(BaseModel):
-    videos: list[DownloadRequest]
-    max_concurrent: int = 8
+    videos: list[DownloadRequest] = Field(min_length=1, max_length=100)
+    max_concurrent: int = Field(8, ge=1, le=16)
 
 
 class ProcessRequest(BaseModel):
@@ -96,25 +109,35 @@ class ProcessRequest(BaseModel):
     description: str = ""
     tags: list[str] = Field(default_factory=list)
 
+    @field_validator("video_id")
+    @classmethod
+    def validate_video_id(cls, value: str) -> str:
+        return safe_id(value, "video id")
+
 
 class BatchProcessRequest(BaseModel):
-    video_ids: list[str]
+    video_ids: list[str] = Field(min_length=1, max_length=100)
     config: AntiDetectionConfig
     output_format: str = "mp4"
-    max_concurrent: int = 4
+    max_concurrent: int = Field(4, ge=1, le=16)
     video_meta: dict[str, dict] = Field(default_factory=dict)
+
+    @field_validator("video_ids")
+    @classmethod
+    def validate_video_ids(cls, value: list[str]) -> list[str]:
+        return [safe_id(item, "video id") for item in value]
 
 
 class SearchRequest(BaseModel):
     query: str
-    max_results: int = 20
+    max_results: int = Field(20, ge=1, le=50)
     page_token: Optional[str] = None
     order: str = "relevance"  # relevance, date, viewCount, rating
-    min_duration: int = 15
-    max_duration: int = 90
-    min_views: Optional[int] = None
-    max_views: Optional[int] = None
-    published_within_days: Optional[int] = None
+    min_duration: int = Field(15, ge=1, le=3600)
+    max_duration: int = Field(90, ge=1, le=7200)
+    min_views: Optional[int] = Field(None, ge=0)
+    max_views: Optional[int] = Field(None, ge=0)
+    published_within_days: Optional[int] = Field(None, ge=1, le=3650)
     region_code: Optional[str] = None
     video_category_id: Optional[str] = None
     niche: Optional[str] = None  # motivational, comedy, gaming, etc.
@@ -123,14 +146,14 @@ class SearchRequest(BaseModel):
 class DiscoverRequest(BaseModel):
     source: str = "trending"
     query: Optional[str] = None
-    max_results: int = 20
+    max_results: int = Field(20, ge=1, le=50)
     page_token: Optional[str] = None
     order: str = "viewCount"
-    min_duration: int = 15
-    max_duration: int = 90
-    min_views: Optional[int] = None
-    max_views: Optional[int] = None
-    published_within_days: Optional[int] = None
+    min_duration: int = Field(15, ge=1, le=3600)
+    max_duration: int = Field(90, ge=1, le=7200)
+    min_views: Optional[int] = Field(None, ge=0)
+    max_views: Optional[int] = Field(None, ge=0)
+    published_within_days: Optional[int] = Field(None, ge=1, le=3650)
     region_code: Optional[str] = None
     video_category_id: Optional[str] = None
     niche: Optional[str] = None  # motivational, comedy, gaming, etc.

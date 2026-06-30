@@ -6,9 +6,9 @@ import { useApp } from "@/lib/store";
 import type { AntiDetectionConfig, AntiDetectionLevel, AssetLibrary, TextRemovalRegion } from "@/types";
 
 const LEVELS: { value: AntiDetectionLevel; label: string; desc: string }[] = [
-  { value: "mild", label: "Mild", desc: "Basic watermark removal + crop jitter" },
-  { value: "moderate", label: "Moderate", desc: "Full video+audio randomization" },
-  { value: "aggressive", label: "Aggressive", desc: "Maximum evasion, all transforms" },
+  { value: "mild", label: "Mild", desc: "Light cleanup and crop adjustment" },
+  { value: "moderate", label: "Moderate", desc: "Balanced visual and audio variation" },
+  { value: "aggressive", label: "Aggressive", desc: "Strong variation with full cleanup" },
 ];
 
 type ControlKey = keyof Pick<
@@ -169,7 +169,7 @@ export default function AntiDetectionControls({ compact = false }: Props) {
   return (
     <div className={`bg-gray-900 border border-gray-700 rounded-lg ${compact ? "p-3" : "p-4"}`}>
       <h3 className={`font-medium text-gray-200 ${compact ? "text-sm" : "text-base"} mb-3`}>
-        Anti-Detection Settings
+        Editing Presets
       </h3>
 
       {/* Level selector */}
@@ -409,14 +409,13 @@ export default function AntiDetectionControls({ compact = false }: Props) {
 
           <p className="text-[10px] text-gray-600 leading-relaxed">
             Music/voiceover files go in <code>backend/assets/music</code> and{" "}
-            <code>backend/assets/voiceover</code>. Auto subtitles require{" "}
-            <code>pip install faster-whisper</code>.
+            <code>backend/assets/voiceover</code>. Auto subtitles use the configured transcription provider or local Whisper.
           </p>
           {assetError && <p className="text-[10px] text-red-400">{assetError}</p>}
         </div>
       )}
 
-      {/* Active protections summary */}
+      {/* Active edits summary */}
       <div className={`flex flex-wrap gap-1 ${compact ? "mt-2" : "mt-3"}`}>
         {state.antiDetection.remove_top_text_banner && (
           <span className="text-[10px] bg-purple-600/20 text-purple-300 px-1.5 py-0.5 rounded">

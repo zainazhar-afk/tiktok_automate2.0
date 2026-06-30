@@ -1,6 +1,13 @@
 logs/
+*.log
+data/
+output/
+uploads/
+temp/
 .env
 .env.*
+!.env.example
+!frontend/.env.example
 backend/.env
 backend/.env.*
 frontend/.env.local

@@ -9,7 +9,7 @@ export default function HomePage() {
         <h1 className="text-2xl font-bold text-white">Discover Trending Shorts</h1>
         <p className="text-gray-400 text-sm mt-1">
           Find trending YouTube Shorts by keyword, hashtag, or competitor channels.
-          Select videos to download them for anti-detection processing.
+          Select approved source videos to prepare them for brand-safe editing.
         </p>
       </div>
       <TrendingVideosGrid />

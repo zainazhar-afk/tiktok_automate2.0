@@ -76,7 +76,7 @@ async def list_videos(type: str = "processed"):
         videos.append({
             "id": vid,
             "filename": os.path.basename(f),
-            "path": f,
+            "path": os.path.basename(f),
             "size_mb": round(stat.st_size / (1024 * 1024), 2),
             "modified": stat.st_mtime,
             "title": meta.get("title", vid),

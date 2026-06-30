@@ -14,6 +14,17 @@ class Settings:
     max_process_concurrent: int = int(os.getenv("MAX_PROCESS_CONCURRENT", "4"))
     data_dir: str = os.path.abspath("data")
     uploads_dir: str = os.path.abspath(os.getenv("UPLOADS_DIR", "uploads"))
+    app_environment: str = os.getenv("APP_ENVIRONMENT", "development")
+    require_auth: bool = os.getenv("REQUIRE_AUTH", "false").lower() in {"1", "true", "yes"}
+    cors_origins_raw: str = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001")
+    service_api_key: str = os.getenv("SERVICE_API_KEY", "")
+    allowed_video_hosts_raw: str = os.getenv(
+        "ALLOWED_VIDEO_HOSTS",
+        "youtube.com,youtu.be,tiktok.com,vimeo.com,instagram.com,facebook.com,fb.watch,loom.com",
+    )
+    max_upload_mb: int = int(os.getenv("MAX_UPLOAD_MB", "1024"))
+    max_download_mb: int = int(os.getenv("MAX_DOWNLOAD_MB", "1024"))
+    max_source_duration_seconds: int = int(os.getenv("MAX_SOURCE_DURATION_SECONDS", "1800"))
 
     # Whisper model size for auto subtitles: tiny|base|small|medium|large-v3
     whisper_model: str = os.getenv("WHISPER_MODEL", "base")
@@ -52,6 +63,16 @@ class Settings:
     def deepgram_api_keys(self) -> list[str]:
         raw = self.deepgram_api_keys_raw.replace("\n", ",").replace(";", ",")
         return [key.strip() for key in raw.split(",") if key.strip()]
+
+    @property
+    def cors_origins(self) -> list[str]:
+        raw = self.cors_origins_raw.replace("\n", ",").replace(";", ",")
+        return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+
+    @property
+    def allowed_video_hosts(self) -> list[str]:
+        raw = self.allowed_video_hosts_raw.replace("\n", ",").replace(";", ",")
+        return [host.strip().lower() for host in raw.split(",") if host.strip()]
 
     @property
     def music_dir(self) -> str:

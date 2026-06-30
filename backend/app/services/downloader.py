@@ -11,6 +11,7 @@ from typing import Optional
 from typing import Callable
 
 from app.config import get_settings
+from app.services.safety import safe_id, validate_public_video_url
 from app.utils.helpers import find_ytdlp, find_aria2c, find_ffmpeg, run_command
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 def find_merged_file(video_id: str) -> Optional[str]:
     """Return path only if a fully merged video file exists."""
+    video_id = safe_id(video_id, "video id")
     for ext in ["mp4", "webm", "mkv"]:
         path = os.path.join(DOWNLOAD_DIR, f"{video_id}.{ext}")
         if os.path.isfile(path) and os.path.getsize(path) > 100_000:
@@ -29,6 +31,7 @@ def find_merged_file(video_id: str) -> Optional[str]:
 
 
 def _has_fragments(video_id: str) -> bool:
+    video_id = safe_id(video_id, "video id")
     for f in os.listdir(DOWNLOAD_DIR):
         if f.startswith(video_id) and (".f" in f or f.endswith(".m4a")):
             return True
@@ -36,6 +39,7 @@ def _has_fragments(video_id: str) -> bool:
 
 
 def _cleanup_fragments(video_id: str):
+    video_id = safe_id(video_id, "video id")
     for f in os.listdir(DOWNLOAD_DIR):
         if f.startswith(video_id) and f != f"{video_id}.mp4":
             try:
@@ -107,6 +111,8 @@ async def download_video(
     progress_callback: Optional[Callable[[float, str], None]] = None,
 ) -> Optional[str]:
     """Download a single video. Skips if merged file already exists."""
+    video_id = safe_id(video_id, "video id")
+    url = validate_public_video_url(url)
     existing = find_merged_file(video_id)
     if existing and not force:
         logger.info(f"Skipping download, already exists: {existing}")
@@ -122,6 +128,7 @@ async def download_video(
         logger.error("ffmpeg required to merge downloads")
         return None
 
+    settings = get_settings()
     aria2c = find_aria2c()
     _cleanup_fragments(video_id)
 
@@ -143,6 +150,8 @@ async def download_video(
         "--no-embed-metadata",
         "--no-embed-subs",
         "--no-embed-chapters",
+        "--max-filesize", f"{settings.max_download_mb}M",
+        "--match-filter", f"duration <= {settings.max_source_duration_seconds}",
         "--ffmpeg-location", ffmpeg,
     ]
     if progress_callback:
@@ -193,6 +202,8 @@ async def batch_download(
     results: dict[str, Optional[str]] = {}
 
     async def download_one(url: str, vid: str):
+        vid = safe_id(vid, "video id")
+        url = validate_public_video_url(url)
         async with sem:
             path = await download_video(url, vid)
             results[vid] = path
@@ -205,6 +216,7 @@ async def batch_download(
 
 
 def cleanup_download(video_id: str):
+    video_id = safe_id(video_id, "video id")
     for f in os.listdir(DOWNLOAD_DIR):
         if f.startswith(video_id):
             try:

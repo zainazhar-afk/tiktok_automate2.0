@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { API_URL } from "@/types";
 import type { ProcessedVideoFile } from "@/types";
-import { listVideos, deleteVideo } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { listVideos, deleteVideo, videoFileUrl } from "@/lib/api";
 
 export default function ExportPanel() {
+  const { accessToken } = useAuth();
   const [videos, setVideos] = useState<ProcessedVideoFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -108,9 +109,9 @@ export default function ExportPanel() {
         {filteredVideos.map((video) => {
           const hashtagText = (video.hashtags || []).join(" ");
           const captionBlock = [video.caption, hashtagText].filter(Boolean).join("\n\n");
-          const videoUrl = `${API_URL}/api/videos/file/${encodeURIComponent(video.filename)}`;
+          const videoUrl = videoFileUrl(video.filename, accessToken);
           const coverUrl = video.cover_filename
-            ? `${API_URL}/api/videos/file/${encodeURIComponent(video.cover_filename)}`
+            ? videoFileUrl(video.cover_filename, accessToken)
             : null;
           return (
             <div key={video.filename} className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
@@ -125,6 +126,8 @@ export default function ExportPanel() {
                 </div>
                 {video.cover_filename && (
                   <div className="aspect-[9/16] bg-gray-800 border-l border-gray-700">
+                    {/* Export covers are local generated media, sometimes tokenized. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={coverUrl || ""}
                       alt="TikTok cover"

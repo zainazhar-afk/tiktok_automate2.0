@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 
+from app.config import get_settings
 from app.models.schemas import VariantGenerationResponse, VariantUploadResponse, VariantUrlRequest
 from app.services import variants
 
@@ -20,14 +21,26 @@ async def upload_source_video(file: UploadFile = File(...)):
 
     upload_id = variants.new_upload_id()
     path = variants.upload_path(upload_id, file.filename)
+    max_bytes = get_settings().max_upload_mb * 1024 * 1024
+    written = 0
     os.makedirs(os.path.dirname(path), exist_ok=True)
     try:
         with open(path, "wb") as out:
             while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Upload exceeds {get_settings().max_upload_mb} MB limit",
+                    )
                 out.write(chunk)
+    except Exception:
+        if os.path.exists(path):
+            os.remove(path)
+        raise
     finally:
         await file.close()
-    return {"upload_id": upload_id, "filename": file.filename}
+    return {"upload_id": upload_id, "filename": os.path.basename(path)}
 
 
 @router.post("/from-url", response_model=VariantUploadResponse)

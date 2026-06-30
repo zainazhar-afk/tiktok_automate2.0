@@ -1,8 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import youtube, videos, process, events, state, editor, timeline, variants
+from app.auth import authenticate_request
 from app.services import state_store
 from app.services.state_store import init_db
 from app.utils.helpers import find_ffmpeg, find_ytdlp, find_aria2c
@@ -11,17 +13,28 @@ import os
 
 app = FastAPI(
     title="TikTok Automate",
-    description="YouTube Shorts → TikTok bulk repurposing with anti-detection editing",
+    description="Short-form repurposing workflow with editing presets, captions, variants, and exports",
     version="2.0.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_settings().cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def auth_middleware(request, call_next):
+    try:
+        request.state.user = await authenticate_request(request)
+    except Exception as exc:
+        status_code = getattr(exc, "status_code", 500)
+        detail = getattr(exc, "detail", "Authentication failed")
+        return JSONResponse({"detail": detail}, status_code=status_code)
+    return await call_next(request)
 
 os.makedirs("output", exist_ok=True)
 os.makedirs("temp", exist_ok=True)
@@ -42,23 +55,30 @@ app.include_router(variants.router, prefix="/api/variants", tags=["Variants"])
 @app.get("/api/health")
 async def health():
     settings = get_settings()
-    return {
-        "status": "ok",
-        "version": "2.0.0",
-        "tools": {
-            "ffmpeg": bool(find_ffmpeg()),
-            "yt_dlp": bool(find_ytdlp()),
-            "aria2c": bool(find_aria2c()),
-            "youtube_api": bool(settings.youtube_api_key),
+    detailed = not settings.require_auth
+    tools = {
+        "ffmpeg": bool(find_ffmpeg()),
+        "yt_dlp": bool(find_ytdlp()),
+        "aria2c": bool(find_aria2c()),
+        "youtube_api": bool(settings.youtube_api_key),
+        "transcription_provider": settings.transcription_provider,
+        "supabase": bool(settings.supabase_url and settings.supabase_secret_key),
+        "state_store": state_store.backend_status(),
+    }
+    if detailed:
+        tools.update({
             "google_ai_keys": len(settings.google_ai_api_keys),
             "groq_keys": len(settings.groq_api_keys),
             "groq_chat_model": settings.groq_chat_model,
             "groq_transcription_model": settings.groq_transcription_model,
             "deepgram_keys": len(settings.deepgram_api_keys),
-            "transcription_provider": settings.transcription_provider,
-            "supabase": bool(settings.supabase_url and settings.supabase_secret_key),
-            "state_store": state_store.backend_status(),
-        },
+        })
+    return {
+        "status": "ok",
+        "version": "2.0.0",
+        "environment": settings.app_environment,
+        "auth_required": settings.require_auth,
+        "tools": tools,
         "concurrency": {
             "download": settings.max_download_concurrent,
             "process": settings.max_process_concurrent,

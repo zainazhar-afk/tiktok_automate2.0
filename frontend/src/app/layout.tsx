@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AppProvider } from "@/lib/store";
+import { AuthGate, AuthProvider } from "@/lib/auth";
 import Navbar from "@/components/ui/Navbar";
 
 const geistSans = Geist({
@@ -15,8 +16,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TikTok Automate - Bulk YouTube Shorts Repurposing",
-  description: "Download trending YouTube Shorts, apply anti-detection edits, and prepare for TikTok upload",
+  title: "TikTok Automate - Short-Form Repurposing Studio",
+  description: "Turn approved source videos into edited short-form variants with captions, covers, and export-ready assets",
 };
 
 export default function RootLayout({
@@ -30,12 +31,16 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
     >
       <body className="min-h-full bg-gray-950 text-gray-100 flex flex-col">
-        <AppProvider>
+        <AuthProvider>
           <Navbar />
-          <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-6">
-            {children}
-          </main>
-        </AppProvider>
+          <AuthGate>
+            <AppProvider>
+              <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-6">
+                {children}
+              </main>
+            </AppProvider>
+          </AuthGate>
+        </AuthProvider>
       </body>
     </html>
   );

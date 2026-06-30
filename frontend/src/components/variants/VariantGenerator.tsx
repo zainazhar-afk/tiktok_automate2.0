@@ -2,13 +2,14 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { API_URL } from "@/types";
 import type { VariantGenerationResponse, VariantSourceStatus, VariantUploadResponse } from "@/types";
-import { generateVariants, getVariantSourceStatus, startVariantSourceFromUrl } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { generateVariants, getVariantSourceStatus, startVariantSourceFromUrl, videoFileUrl } from "@/lib/api";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default function VariantGenerator() {
+  const { accessToken } = useAuth();
   const [videoUrl, setVideoUrl] = useState("");
   const [upload, setUpload] = useState<VariantUploadResponse | null>(null);
   const [downloadStatus, setDownloadStatus] = useState<VariantSourceStatus | null>(null);
@@ -211,7 +212,7 @@ export default function VariantGenerator() {
           {result && (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {result.files.map((item, idx) => {
-                const videoUrl = `${API_URL}/api/videos/file/${encodeURIComponent(item.filename)}`;
+                const videoUrl = videoFileUrl(item.filename, accessToken);
                 return (
                   <div key={item.filename} className="overflow-hidden rounded-lg border border-gray-800 bg-gray-950">
                     <div className="aspect-[9/16] bg-black">

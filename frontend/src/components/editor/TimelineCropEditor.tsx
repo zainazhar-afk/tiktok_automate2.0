@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { API_URL } from "@/types";
 import type { ProcessedVideoFile, TimelineClip, TimelineClipScore, TimelineHookSuggestion, TimelineProject, TimelineQueueJob } from "@/types";
+import { useAuth } from "@/lib/auth";
 import {
   applyTimelineSilenceCuts,
   applyTimelineSmartCrop,
@@ -20,6 +20,7 @@ import {
   resumeTimelineQueueJob,
   saveTimelineProject,
   scoreTimelineProject,
+  videoFileUrl,
 } from "@/lib/api";
 
 function cloneProject(project: TimelineProject): TimelineProject {
@@ -98,6 +99,7 @@ function statusClass(status: TimelineQueueJob["status"]) {
 
 export default function TimelineCropEditor() {
   const params = useSearchParams();
+  const { accessToken } = useAuth();
   const requestedVideo = params.get("video");
   const [videos, setVideos] = useState<ProcessedVideoFile[]>([]);
   const [activeId, setActiveId] = useState(requestedVideo || "");
@@ -124,7 +126,7 @@ export default function TimelineCropEditor() {
   const activeVideo = videos.find((video) => video.id === activeId) || null;
   const selectedClip = project?.clips.find((clip) => clip.id === selectedClipId) || project?.clips[0] || null;
   const brollVideos = videos.filter((video) => video.filename !== activeVideo?.filename);
-  const previewUrl = activeVideo ? `${API_URL}/api/videos/file/${encodeURIComponent(activeVideo.filename)}` : "";
+  const previewUrl = activeVideo ? videoFileUrl(activeVideo.filename, accessToken) : "";
 
   const totalDuration = useMemo(() => {
     return project?.clips.reduce((sum, clip) => sum + Math.max(0, clip.source_end - clip.source_start), 0) || 0;
@@ -485,7 +487,7 @@ export default function TimelineCropEditor() {
     try {
       const headline = coverHeadline.trim() || project.hook_title || selectedClip?.title || "New short";
       const result = await generateTimelineCover(project, headline, coverPlatform);
-      setCoverPreview(`${API_URL}/api/videos/file/${encodeURIComponent(result.cover_filename)}`);
+      setCoverPreview(videoFileUrl(result.cover_filename, accessToken));
       await loadVideos();
       setMessage(`Cover generated from ${result.selected_time.toFixed(1)}s`);
     } catch (e: unknown) {
@@ -1151,6 +1153,8 @@ export default function TimelineCropEditor() {
               </div>
               {coverPreview && (
                 <div className="overflow-hidden rounded border border-gray-800 bg-gray-950">
+                  {/* Generated cover URLs may include API auth query params. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={coverPreview} alt="Generated cover" className="aspect-[9/16] w-full object-cover" />
                 </div>
               )}
@@ -1177,8 +1181,8 @@ export default function TimelineCropEditor() {
               ) : (
                 <div className="grid gap-2">
                   {queueJobs.slice(0, 6).map((job) => {
-                    const sourceUrl = job.source_filename ? `${API_URL}/api/videos/file/${encodeURIComponent(job.source_filename)}` : "";
-                    const outputUrl = job.output_filename ? `${API_URL}/api/videos/file/${encodeURIComponent(job.output_filename)}` : "";
+                    const sourceUrl = job.source_filename ? videoFileUrl(job.source_filename, accessToken) : "";
+                    const outputUrl = job.output_filename ? videoFileUrl(job.output_filename, accessToken) : "";
                     return (
                       <div key={job.job_id} className="rounded border border-gray-800 bg-gray-950/60 p-3">
                         <div className="flex items-start justify-between gap-2">

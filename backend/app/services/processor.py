@@ -25,6 +25,7 @@ from app.config import get_settings
 from app.utils.helpers import find_ffmpeg, run_command, run_command_with_progress
 from app.models.schemas import AntiDetectionConfig, AntiDetectionLevel, TextRemovalMode
 from app.services import subtitles as subtitles_service
+from app.services.safety import safe_asset_filename, safe_id
 
 logger = logging.getLogger(__name__)
 
@@ -494,9 +495,17 @@ async def validate_output(path: str) -> tuple[bool, str]:
 def _resolve_asset(path: Optional[str], base_dir: str) -> Optional[str]:
     if not path:
         return None
-    if os.path.isabs(path) and os.path.isfile(path):
-        return path
-    candidate = os.path.join(base_dir, path)
+    try:
+        filename = safe_asset_filename(path)
+    except ValueError:
+        return None
+    if not filename:
+        return None
+    candidate = os.path.join(base_dir, filename)
+    base = os.path.abspath(base_dir)
+    resolved = os.path.abspath(candidate)
+    if not resolved.startswith(base + os.sep):
+        return None
     return candidate if os.path.isfile(candidate) else None
 
 
@@ -520,7 +529,8 @@ async def process_video(
     config: AntiDetectionConfig,
     progress_callback: Optional[Callable[[float], None]] = None,
 ) -> Optional[str]:
-    """Process a video with anti-detection filters. Returns validated output path."""
+    """Process a video with configured editing filters. Returns validated output path."""
+    video_id = safe_id(video_id, "video id")
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         logger.error("ffmpeg not found")

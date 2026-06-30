@@ -41,6 +41,8 @@ export default function VideoCard({ video }: VideoCardProps) {
     >
       {/* Thumbnail */}
       <div className="aspect-[9/16] bg-gray-800 relative overflow-hidden">
+        {/* External discovery thumbnails can come from arbitrary providers. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={thumbnailUrl}
           alt={video.title}

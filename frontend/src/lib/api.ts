@@ -1,4 +1,5 @@
 import { API_URL } from "@/types";
+import { getAccessToken, withAccessToken } from "@/lib/auth";
 import type {
   AntiDetectionConfig,
   AssetLibrary,
@@ -27,6 +28,19 @@ function filterBody(filters?: Partial<DiscoveryFilters>, pageToken?: string | nu
   };
 }
 
+async function authFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const token = await getAccessToken();
+  const headers = new Headers(init.headers);
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  return fetch(input, { ...init, headers });
+}
+
+export function videoFileUrl(filename: string, accessToken?: string | null): string {
+  return withAccessToken(`${API_URL}/api/videos/file/${encodeURIComponent(filename)}`, accessToken);
+}
+
 /** Extract a human-readable message (FastAPI `detail`) from an error response. */
 async function errorMessage(res: Response): Promise<string> {
   const raw = await res.text();
@@ -47,7 +61,7 @@ export async function searchVideos(
   filters?: Partial<DiscoveryFilters>,
   pageToken?: string | null
 ): Promise<DiscoveryResult> {
-  const res = await fetch(`${API_URL}/api/youtube/search`, {
+  const res = await authFetch(`${API_URL}/api/youtube/search`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, ...filterBody(filters, pageToken) }),
@@ -62,7 +76,7 @@ export async function discoverContent(
   filters?: Partial<DiscoveryFilters>,
   pageToken?: string | null
 ): Promise<DiscoveryResult> {
-  const res = await fetch(`${API_URL}/api/youtube/discover`, {
+  const res = await authFetch(`${API_URL}/api/youtube/discover`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source, query, ...filterBody(filters, pageToken) }),
@@ -72,7 +86,7 @@ export async function discoverContent(
 }
 
 export async function downloadVideo(url: string, videoId: string, force = false) {
-  const res = await fetch(`${API_URL}/api/youtube/download`, {
+  const res = await authFetch(`${API_URL}/api/youtube/download`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, video_id: videoId, force }),
@@ -85,7 +99,7 @@ export async function batchDownload(
   videos: { url: string; video_id: string }[],
   maxConcurrent = 8
 ) {
-  const res = await fetch(`${API_URL}/api/youtube/batch-download`, {
+  const res = await authFetch(`${API_URL}/api/youtube/batch-download`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ videos, max_concurrent: maxConcurrent }),
@@ -99,7 +113,7 @@ export async function processVideo(
   config: AntiDetectionConfig,
   meta?: { title?: string; channel?: string; description?: string; tags?: string[] }
 ) {
-  const res = await fetch(`${API_URL}/api/process/single`, {
+  const res = await authFetch(`${API_URL}/api/process/single`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -121,7 +135,7 @@ export async function pipelineProcess(
   videoMeta?: Record<string, { url?: string; title?: string; channel?: string; description?: string; tags?: string[] }>,
   maxConcurrent = 4
 ) {
-  const res = await fetch(`${API_URL}/api/process/pipeline`, {
+  const res = await authFetch(`${API_URL}/api/process/pipeline`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -136,20 +150,20 @@ export async function pipelineProcess(
 }
 
 export async function listJobs() {
-  const res = await fetch(`${API_URL}/api/process/jobs`);
+  const res = await authFetch(`${API_URL}/api/process/jobs`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function listStateVideos(status?: string) {
   const q = status ? `?status=${status}` : "";
-  const res = await fetch(`${API_URL}/api/state/videos${q}`);
+  const res = await authFetch(`${API_URL}/api/state/videos${q}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function syncState(items: { video_id: string; status?: string; download_path?: string; output_path?: string; title?: string; channel?: string }[]) {
-  const res = await fetch(`${API_URL}/api/state/sync`, {
+  const res = await authFetch(`${API_URL}/api/state/sync`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ items }),
@@ -159,25 +173,25 @@ export async function syncState(items: { video_id: string; status?: string; down
 }
 
 export async function listVideos(type: "processed" | "downloaded" = "processed") {
-  const res = await fetch(`${API_URL}/api/videos/list?type=${type}`);
+  const res = await authFetch(`${API_URL}/api/videos/list?type=${type}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function listAssets(): Promise<AssetLibrary> {
-  const res = await fetch(`${API_URL}/api/videos/assets`);
+  const res = await authFetch(`${API_URL}/api/videos/assets`);
   if (!res.ok) throw new Error(await errorMessage(res));
   return res.json();
 }
 
 export async function getSubtitleTrack(videoId: string): Promise<SubtitleTrack> {
-  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}`);
+  const res = await authFetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}`);
   if (!res.ok) throw new Error(await errorMessage(res));
   return res.json();
 }
 
 export async function saveSubtitleTrack(track: SubtitleTrack): Promise<SubtitleTrack> {
-  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(track.video_id)}`, {
+  const res = await authFetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(track.video_id)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(track),
@@ -188,7 +202,7 @@ export async function saveSubtitleTrack(track: SubtitleTrack): Promise<SubtitleT
 
 
 export async function applySubtitleTranscript(track: SubtitleTrack): Promise<SubtitleTrack> {
-  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(track.video_id)}/apply`, {
+  const res = await authFetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(track.video_id)}/apply`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ track }),
@@ -209,7 +223,7 @@ export async function transcribeSubtitleTrack(
   videoId: string,
   options: TranscriptionOptions = {}
 ): Promise<SubtitleTrack> {
-  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/transcribe`, {
+  const res = await authFetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/transcribe`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -227,7 +241,7 @@ export async function importSubtitleTrack(
   format: "srt" | "vtt",
   content: string
 ): Promise<SubtitleTrack> {
-  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/import`, {
+  const res = await authFetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/import`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ format, content }),
@@ -237,7 +251,7 @@ export async function importSubtitleTrack(
 }
 
 export async function exportSubtitleTrack(videoId: string, format: "srt" | "vtt"): Promise<string> {
-  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/export?format=${format}`);
+  const res = await authFetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/export?format=${format}`);
   if (!res.ok) throw new Error(await errorMessage(res));
   return res.text();
 }
@@ -247,7 +261,7 @@ export async function translateSubtitleTrack(
   targetLanguage: string,
   sourceLanguage = "en"
 ): Promise<SubtitleTrack> {
-  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/translate`, {
+  const res = await authFetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/translate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ target_language: targetLanguage, source_language: sourceLanguage }),
@@ -257,7 +271,7 @@ export async function translateSubtitleTrack(
 }
 
 export async function renderSubtitleVideo(videoId: string) {
-  const res = await fetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/render`, {
+  const res = await authFetch(`${API_URL}/api/editor/subtitles/${encodeURIComponent(videoId)}/render`, {
     method: "POST",
   });
   if (!res.ok) throw new Error(await errorMessage(res));
@@ -265,13 +279,13 @@ export async function renderSubtitleVideo(videoId: string) {
 }
 
 export async function getTimelineProject(videoId: string): Promise<TimelineProject> {
-  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(videoId)}`);
+  const res = await authFetch(`${API_URL}/api/timeline/${encodeURIComponent(videoId)}`);
   if (!res.ok) throw new Error(await errorMessage(res));
   return res.json();
 }
 
 export async function saveTimelineProject(project: TimelineProject): Promise<TimelineProject> {
-  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}`, {
+  const res = await authFetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(project),
@@ -281,7 +295,7 @@ export async function saveTimelineProject(project: TimelineProject): Promise<Tim
 }
 
 export async function renderTimelineProject(project: TimelineProject): Promise<TimelineRenderResponse> {
-  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/render`, {
+  const res = await authFetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/render`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(project),
@@ -291,7 +305,7 @@ export async function renderTimelineProject(project: TimelineProject): Promise<T
 }
 
 export async function enqueueTimelineRender(project: TimelineProject): Promise<TimelineQueueJob> {
-  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/queue`, {
+  const res = await authFetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/queue`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ project }),
@@ -301,31 +315,31 @@ export async function enqueueTimelineRender(project: TimelineProject): Promise<T
 }
 
 export async function listTimelineQueue(): Promise<{ jobs: TimelineQueueJob[] }> {
-  const res = await fetch(`${API_URL}/api/timeline/queue/jobs`);
+  const res = await authFetch(`${API_URL}/api/timeline/queue/jobs`);
   if (!res.ok) throw new Error(await errorMessage(res));
   return res.json();
 }
 
 export async function pauseTimelineQueueJob(jobId: string): Promise<TimelineQueueJob> {
-  const res = await fetch(`${API_URL}/api/timeline/queue/${encodeURIComponent(jobId)}/pause`, { method: "POST" });
+  const res = await authFetch(`${API_URL}/api/timeline/queue/${encodeURIComponent(jobId)}/pause`, { method: "POST" });
   if (!res.ok) throw new Error(await errorMessage(res));
   return res.json();
 }
 
 export async function resumeTimelineQueueJob(jobId: string): Promise<TimelineQueueJob> {
-  const res = await fetch(`${API_URL}/api/timeline/queue/${encodeURIComponent(jobId)}/resume`, { method: "POST" });
+  const res = await authFetch(`${API_URL}/api/timeline/queue/${encodeURIComponent(jobId)}/resume`, { method: "POST" });
   if (!res.ok) throw new Error(await errorMessage(res));
   return res.json();
 }
 
 export async function retryTimelineQueueJob(jobId: string): Promise<TimelineQueueJob> {
-  const res = await fetch(`${API_URL}/api/timeline/queue/${encodeURIComponent(jobId)}/retry`, { method: "POST" });
+  const res = await authFetch(`${API_URL}/api/timeline/queue/${encodeURIComponent(jobId)}/retry`, { method: "POST" });
   if (!res.ok) throw new Error(await errorMessage(res));
   return res.json();
 }
 
 export async function applyTimelineSilenceCuts(project: TimelineProject): Promise<TimelineProject> {
-  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/silence-cuts`, {
+  const res = await authFetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/silence-cuts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ project }),
@@ -335,7 +349,7 @@ export async function applyTimelineSilenceCuts(project: TimelineProject): Promis
 }
 
 export async function generateTimelineHooks(project: TimelineProject): Promise<TimelineHookResponse> {
-  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/hooks`, {
+  const res = await authFetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/hooks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ project }),
@@ -349,7 +363,7 @@ export async function generateTimelineCover(
   headline: string,
   platform: "tiktok" | "reels" | "shorts" = "tiktok"
 ): Promise<TimelineCoverResponse> {
-  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/cover`, {
+  const res = await authFetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/cover`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -366,7 +380,7 @@ export async function generateTimelineCover(
 }
 
 export async function scoreTimelineProject(project: TimelineProject): Promise<TimelineScoreResponse> {
-  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/score`, {
+  const res = await authFetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/score`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ project }),
@@ -380,7 +394,7 @@ export async function applyTimelineSmartCrop(
   clipId: string,
   mode: "face" | "object"
 ): Promise<TimelineSmartCropResponse> {
-  const res = await fetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/smart-crop`, {
+  const res = await authFetch(`${API_URL}/api/timeline/${encodeURIComponent(project.video_id)}/smart-crop`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ project, clip_id: clipId, mode, sample_interval: 0.5 }),
@@ -392,7 +406,7 @@ export async function applyTimelineSmartCrop(
 export async function uploadVariantSource(file: File): Promise<VariantUploadResponse> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API_URL}/api/variants/upload`, {
+  const res = await authFetch(`${API_URL}/api/variants/upload`, {
     method: "POST",
     body: form,
   });
@@ -401,7 +415,7 @@ export async function uploadVariantSource(file: File): Promise<VariantUploadResp
 }
 
 export async function createVariantSourceFromUrl(url: string): Promise<VariantUploadResponse> {
-  const res = await fetch(`${API_URL}/api/variants/from-url`, {
+  const res = await authFetch(`${API_URL}/api/variants/from-url`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
@@ -411,7 +425,7 @@ export async function createVariantSourceFromUrl(url: string): Promise<VariantUp
 }
 
 export async function startVariantSourceFromUrl(url: string): Promise<VariantSourceStatus> {
-  const res = await fetch(`${API_URL}/api/variants/from-url/start`, {
+  const res = await authFetch(`${API_URL}/api/variants/from-url/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
@@ -421,13 +435,13 @@ export async function startVariantSourceFromUrl(url: string): Promise<VariantSou
 }
 
 export async function getVariantSourceStatus(uploadId: string): Promise<VariantSourceStatus> {
-  const res = await fetch(`${API_URL}/api/variants/${encodeURIComponent(uploadId)}/source-status`);
+  const res = await authFetch(`${API_URL}/api/variants/${encodeURIComponent(uploadId)}/source-status`);
   if (!res.ok) throw new Error(await errorMessage(res));
   return res.json();
 }
 
 export async function generateVariants(uploadId: string): Promise<VariantGenerationResponse> {
-  const res = await fetch(`${API_URL}/api/variants/${encodeURIComponent(uploadId)}/generate`, {
+  const res = await authFetch(`${API_URL}/api/variants/${encodeURIComponent(uploadId)}/generate`, {
     method: "POST",
   });
   if (!res.ok) throw new Error(await errorMessage(res));
@@ -435,24 +449,32 @@ export async function generateVariants(uploadId: string): Promise<VariantGenerat
 }
 
 export async function deleteVideo(filename: string) {
-  const res = await fetch(`${API_URL}/api/videos/${encodeURIComponent(filename)}`, { method: "DELETE" });
+  const res = await authFetch(`${API_URL}/api/videos/${encodeURIComponent(filename)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function checkHealth() {
-  const res = await fetch(`${API_URL}/api/health`);
+  const res = await authFetch(`${API_URL}/api/health`);
   return res.json();
 }
 
 export function subscribeEvents(onEvent: (data: unknown) => void): () => void {
-  const es = new EventSource(`${API_URL}/api/events/stream`);
-  es.onmessage = (e) => {
-    try {
-      onEvent(JSON.parse(e.data));
-    } catch {
-      // ignore keepalive
-    }
+  let es: EventSource | null = null;
+  let closed = false;
+  void getAccessToken().then((token) => {
+    if (closed) return;
+    es = new EventSource(withAccessToken(`${API_URL}/api/events/stream`, token));
+    es.onmessage = (e) => {
+      try {
+        onEvent(JSON.parse(e.data));
+      } catch {
+        // ignore keepalive
+      }
+    };
+  });
+  return () => {
+    closed = true;
+    es?.close();
   };
-  return () => es.close();
 }

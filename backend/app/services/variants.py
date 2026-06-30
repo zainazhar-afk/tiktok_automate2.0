@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.models.schemas import VariantSpec
 from app.services import downloader, state_store, variant_intelligence
 from app.services.processor import TARGET_H, TARGET_W, probe_video, validate_output
+from app.services.safety import validate_public_video_url
 from app.utils.helpers import find_ffmpeg, run_command
 
 OUTPUT_DIR = os.path.abspath("output")
@@ -43,9 +44,7 @@ def upload_path(upload_id: str, original_name: str) -> str:
 
 
 async def create_source_from_url(url: str) -> dict:
-    clean_url = (url or "").strip()
-    if not re.match(r"^https?://", clean_url, flags=re.I):
-        raise ValueError("Enter a valid http or https video URL")
+    clean_url = validate_public_video_url(url)
 
     upload_id = new_upload_id()
     path = await downloader.download_video(clean_url, upload_id, force=True, timeout=1200)
@@ -60,9 +59,7 @@ async def create_source_from_url(url: str) -> dict:
 
 
 def start_source_download(url: str) -> dict:
-    clean_url = (url or "").strip()
-    if not re.match(r"^https?://", clean_url, flags=re.I):
-        raise ValueError("Enter a valid http or https video URL")
+    clean_url = validate_public_video_url(url)
 
     upload_id = new_upload_id()
     now = datetime.now(timezone.utc).isoformat()
