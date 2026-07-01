@@ -380,3 +380,25 @@ export interface VariantGenerationResponse {
     signals?: string[];
   };
 }
+
+export interface AccountUsageItem {
+  label: string;
+  used: number;
+  limit: number;
+  remaining?: number | null;
+}
+
+export interface AccountStatus {
+  user_id: string;
+  email: string;
+  plan: string;
+  subscription_status: string;
+  subscription_active: boolean;
+  billing_required: boolean;
+  rights_required: boolean;
+  rights_accepted: boolean;
+  period_start: string;
+  usage: Record<string, AccountUsageItem>;
+  stripe_configured: boolean;
+  stripe_customer_id: string;
+}

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 import os
 import glob as glob_module
@@ -6,7 +6,7 @@ import mimetypes
 from pathlib import Path
 
 from app.config import get_settings
-from app.services import state_store
+from app.services import entitlements, state_store
 
 router = APIRouter()
 
@@ -98,7 +98,13 @@ async def list_assets():
 
 
 @router.get("/file/{filename}")
-async def get_video_file(filename: str):
+async def get_video_file(filename: str, request: Request):
+    entitlements.require_feature(
+        request,
+        "export",
+        rights_required=True,
+        metadata={"filename": filename},
+    )
     path = _resolve_media_file(filename)
     if path:
         safe_name = os.path.basename(path)

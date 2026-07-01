@@ -2,17 +2,23 @@
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, UploadFile
 
 from app.config import get_settings
 from app.models.schemas import VariantGenerationResponse, VariantUploadResponse, VariantUrlRequest
-from app.services import variants
+from app.services import entitlements, variants
 
 router = APIRouter()
 
 
 @router.post("/upload", response_model=VariantUploadResponse)
-async def upload_source_video(file: UploadFile = File(...)):
+async def upload_source_video(request: Request, file: UploadFile = File(...)):
+    entitlements.require_feature(
+        request,
+        "variant",
+        rights_required=True,
+        metadata={"kind": "source_upload", "filename": file.filename or ""},
+    )
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
     suffix = Path(file.filename).suffix.lower()
@@ -44,7 +50,13 @@ async def upload_source_video(file: UploadFile = File(...)):
 
 
 @router.post("/from-url", response_model=VariantUploadResponse)
-async def create_source_from_url(req: VariantUrlRequest):
+async def create_source_from_url(req: VariantUrlRequest, request: Request):
+    entitlements.require_feature(
+        request,
+        "download",
+        rights_required=True,
+        metadata={"kind": "variant_source_url", "url": req.url},
+    )
     try:
         source = await variants.create_source_from_url(req.url)
         return {"upload_id": source["upload_id"], "filename": source["filename"]}
@@ -55,7 +67,13 @@ async def create_source_from_url(req: VariantUrlRequest):
 
 
 @router.post("/from-url/start")
-async def start_source_download(req: VariantUrlRequest, background_tasks: BackgroundTasks):
+async def start_source_download(req: VariantUrlRequest, background_tasks: BackgroundTasks, request: Request):
+    entitlements.require_feature(
+        request,
+        "download",
+        rights_required=True,
+        metadata={"kind": "variant_source_url", "url": req.url, "background": True},
+    )
     try:
         source = variants.start_source_download(req.url)
         background_tasks.add_task(
@@ -79,7 +97,14 @@ async def get_source_download_status(upload_id: str):
 
 
 @router.post("/{upload_id}/generate", response_model=VariantGenerationResponse)
-async def generate_source_variants(upload_id: str):
+async def generate_source_variants(upload_id: str, request: Request):
+    entitlements.require_feature(
+        request,
+        "variant",
+        quantity=10,
+        rights_required=True,
+        metadata={"upload_id": upload_id, "requested_variants": 10},
+    )
     try:
         return await variants.generate_variants(upload_id, count=10)
     except FileNotFoundError as e:

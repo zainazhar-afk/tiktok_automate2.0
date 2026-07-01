@@ -1,11 +1,11 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 
 from app.config import get_settings
 from app.models.schemas import (
     ProcessRequest, BatchProcessRequest, AntiDetectionConfig,
     JobStatus, JobInfo,
 )
-from app.services import processor, downloader, job_queue, metadata, state_store
+from app.services import processor, downloader, entitlements, job_queue, metadata, state_store
 
 router = APIRouter()
 
@@ -18,7 +18,13 @@ def _resolve_input(video_id: str) -> str:
 
 
 @router.post("/single")
-async def process_single(req: ProcessRequest):
+async def process_single(req: ProcessRequest, request: Request):
+    entitlements.require_feature(
+        request,
+        "process",
+        rights_required=True,
+        metadata={"video_id": req.video_id},
+    )
     input_path = _resolve_input(req.video_id)
     state_store.upsert_video(
         req.video_id, title=req.title, channel=req.channel, status="processing"
@@ -54,8 +60,15 @@ async def process_single(req: ProcessRequest):
 
 
 @router.post("/batch")
-async def process_batch(req: BatchProcessRequest):
+async def process_batch(req: BatchProcessRequest, request: Request):
     settings = get_settings()
+    entitlements.require_feature(
+        request,
+        "process",
+        quantity=len(req.video_ids),
+        rights_required=True,
+        metadata={"video_ids": req.video_ids},
+    )
     inputs = []
     missing = []
 
@@ -82,9 +95,23 @@ async def process_batch(req: BatchProcessRequest):
 
 
 @router.post("/pipeline")
-async def pipeline_process(req: BatchProcessRequest, background_tasks: BackgroundTasks):
+async def pipeline_process(req: BatchProcessRequest, background_tasks: BackgroundTasks, request: Request):
     """Enqueue download+process+metadata via Redis worker, or run in-process."""
     settings = get_settings()
+    entitlements.require_feature(
+        request,
+        "download",
+        quantity=len(req.video_ids),
+        rights_required=True,
+        metadata={"video_ids": req.video_ids, "pipeline": True},
+    )
+    entitlements.require_feature(
+        request,
+        "process",
+        quantity=len(req.video_ids),
+        rights_required=True,
+        metadata={"video_ids": req.video_ids, "pipeline": True},
+    )
     video_meta = req.video_meta or {}
     urls = {
         vid: video_meta.get(vid, {}).get("url", f"https://youtube.com/shorts/{vid}")

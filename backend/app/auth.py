@@ -19,11 +19,15 @@ class AuthUser:
     user_id: str
     email: str = ""
     role: str = "authenticated"
+    plan: str = ""
+    subscription_status: str = ""
+    stripe_customer_id: str = ""
 
 
 def _public_paths() -> tuple[str, ...]:
     return (
         "/api/health",
+        "/api/account/billing/webhook",
         "/docs",
         "/redoc",
         "/openapi.json",
@@ -99,21 +103,47 @@ def verify_token(token: str) -> AuthUser:
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session subject")
 
+    app_metadata = claims.get("app_metadata") if isinstance(claims.get("app_metadata"), dict) else {}
+    user_metadata = claims.get("user_metadata") if isinstance(claims.get("user_metadata"), dict) else {}
+
     return AuthUser(
         user_id=user_id,
-        email=str(claims.get("email") or claims.get("user_metadata", {}).get("email") or ""),
+        email=str(claims.get("email") or user_metadata.get("email") or ""),
         role=str(claims.get("role") or "authenticated"),
+        plan=str(app_metadata.get("plan") or user_metadata.get("plan") or ""),
+        subscription_status=str(
+            app_metadata.get("subscription_status")
+            or app_metadata.get("stripe_subscription_status")
+            or user_metadata.get("subscription_status")
+            or ""
+        ),
+        stripe_customer_id=str(
+            app_metadata.get("stripe_customer_id")
+            or user_metadata.get("stripe_customer_id")
+            or ""
+        ),
     )
 
 
 async def authenticate_request(request: Request) -> AuthUser | None:
     settings = get_settings()
     if not settings.require_auth:
-        return AuthUser(user_id="local-dev", email="local@dev", role="developer")
+        return AuthUser(
+            user_id="local-dev",
+            email="local@dev",
+            role="developer",
+            plan=settings.default_plan,
+            subscription_status="active",
+        )
     if is_public_request(request):
         return None
     if _service_key_allowed(request):
-        return AuthUser(user_id="service-api-key", role="service")
+        return AuthUser(
+            user_id="service-api-key",
+            role="service",
+            plan=settings.default_plan,
+            subscription_status="active",
+        )
 
     token = _bearer_token(request)
     if not token:

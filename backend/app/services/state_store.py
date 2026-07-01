@@ -7,6 +7,7 @@ postgres with SUPABASE_DB_URL/DATABASE_URL to use Supabase Postgres.
 import json
 import os
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -130,6 +131,31 @@ def _create_schema(conn):
             project TEXT,
             updated_at TEXT
         )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS account_profiles (
+            owner_id TEXT PRIMARY KEY,
+            plan TEXT DEFAULT 'free',
+            subscription_status TEXT DEFAULT 'inactive',
+            stripe_customer_id TEXT,
+            rights_accepted INTEGER DEFAULT 0,
+            metadata TEXT,
+            updated_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS usage_events (
+            event_id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            quantity INTEGER DEFAULT 1,
+            metadata TEXT,
+            created_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_usage_owner_type_created
+        ON usage_events(owner_id, event_type, created_at)
     """)
     conn.commit()
 
@@ -326,3 +352,140 @@ def get_timeline_project(video_id: str) -> Optional[dict]:
         return json.loads(project_json)
     except json.JSONDecodeError:
         return None
+
+
+def get_account_profile(owner_id: str) -> Optional[dict]:
+    ph = _ph()
+    with _conn() as conn:
+        row = conn.execute(
+            f"SELECT * FROM account_profiles WHERE owner_id = {ph}", (owner_id,)
+        ).fetchone()
+    if not row:
+        return None
+    data = _row_dict(row)
+    data["rights_accepted"] = bool(data.get("rights_accepted"))
+    if data.get("metadata"):
+        data["metadata"] = json.loads(data["metadata"])
+    else:
+        data["metadata"] = {}
+    return data
+
+
+def get_account_profile_by_customer(stripe_customer_id: str) -> Optional[dict]:
+    if not stripe_customer_id:
+        return None
+    ph = _ph()
+    with _conn() as conn:
+        row = conn.execute(
+            f"SELECT * FROM account_profiles WHERE stripe_customer_id = {ph}",
+            (stripe_customer_id,),
+        ).fetchone()
+    if not row:
+        return None
+    data = _row_dict(row)
+    data["rights_accepted"] = bool(data.get("rights_accepted"))
+    if data.get("metadata"):
+        data["metadata"] = json.loads(data["metadata"])
+    else:
+        data["metadata"] = {}
+    return data
+
+
+def save_account_profile(
+    owner_id: str,
+    *,
+    plan: Optional[str] = None,
+    subscription_status: Optional[str] = None,
+    stripe_customer_id: Optional[str] = None,
+    rights_accepted: Optional[bool] = None,
+    metadata: Optional[dict] = None,
+) -> dict:
+    existing = get_account_profile(owner_id) or {}
+    next_data = {
+        "plan": plan if plan is not None else existing.get("plan", "free"),
+        "subscription_status": (
+            subscription_status
+            if subscription_status is not None
+            else existing.get("subscription_status", "inactive")
+        ),
+        "stripe_customer_id": (
+            stripe_customer_id
+            if stripe_customer_id is not None
+            else existing.get("stripe_customer_id")
+        ),
+        "rights_accepted": (
+            rights_accepted
+            if rights_accepted is not None
+            else bool(existing.get("rights_accepted", False))
+        ),
+        "metadata": metadata if metadata is not None else existing.get("metadata", {}),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    ph = _ph()
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO account_profiles
+               (owner_id, plan, subscription_status, stripe_customer_id, rights_accepted, metadata, updated_at)
+               VALUES ({0}, {0}, {0}, {0}, {0}, {0}, {0})
+               ON CONFLICT(owner_id) DO UPDATE SET
+                   plan = excluded.plan,
+                   subscription_status = excluded.subscription_status,
+                   stripe_customer_id = excluded.stripe_customer_id,
+                   rights_accepted = excluded.rights_accepted,
+                   metadata = excluded.metadata,
+                   updated_at = excluded.updated_at""".format(ph),
+            (
+                owner_id,
+                next_data["plan"],
+                next_data["subscription_status"],
+                next_data["stripe_customer_id"],
+                1 if next_data["rights_accepted"] else 0,
+                json.dumps(next_data["metadata"]),
+                next_data["updated_at"],
+            ),
+        )
+        conn.commit()
+    return get_account_profile(owner_id) or {"owner_id": owner_id, **next_data}
+
+
+def record_usage(owner_id: str, event_type: str, quantity: int = 1, metadata: Optional[dict] = None) -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    event = {
+        "event_id": uuid.uuid4().hex,
+        "owner_id": owner_id,
+        "event_type": event_type,
+        "quantity": max(1, int(quantity or 1)),
+        "metadata": metadata or {},
+        "created_at": now,
+    }
+    ph = _ph()
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO usage_events
+               (event_id, owner_id, event_type, quantity, metadata, created_at)
+               VALUES ({0}, {0}, {0}, {0}, {0}, {0})""".format(ph),
+            (
+                event["event_id"],
+                event["owner_id"],
+                event["event_type"],
+                event["quantity"],
+                json.dumps(event["metadata"]),
+                event["created_at"],
+            ),
+        )
+        conn.commit()
+    return event
+
+
+def usage_totals(owner_id: str, period_start: str) -> dict[str, int]:
+    ph = _ph()
+    with _conn() as conn:
+        rows = conn.execute(
+            f"""SELECT event_type, COALESCE(SUM(quantity), 0) AS total
+                FROM usage_events
+                WHERE owner_id = {ph} AND created_at >= {ph}
+                GROUP BY event_type""",
+            (owner_id, period_start),
+        ).fetchall()
+    return {row["event_type"]: int(row["total"] or 0) for row in rows}

@@ -1,5 +1,5 @@
 """Timeline and crop editor API."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.models.schemas import (
     TimelineCoverRequest,
@@ -15,7 +15,7 @@ from app.models.schemas import (
     TimelineSmartCropRequest,
     TimelineSmartCropResponse,
 )
-from app.services import clip_scoring, cover_generator, render_queue, timeline_editor
+from app.services import clip_scoring, cover_generator, entitlements, render_queue, timeline_editor
 
 router = APIRouter()
 
@@ -39,9 +39,15 @@ async def save_timeline_project(video_id: str, project: TimelineProject):
 
 
 @router.post("/{video_id}/render", response_model=TimelineRenderResponse)
-async def render_timeline_project(video_id: str, project: TimelineProject):
+async def render_timeline_project(video_id: str, project: TimelineProject, request: Request):
     if video_id != project.video_id:
         raise HTTPException(status_code=400, detail="video id mismatch")
+    entitlements.require_feature(
+        request,
+        "timeline_render",
+        rights_required=True,
+        metadata={"video_id": video_id, "clips": len(project.clips)},
+    )
     try:
         return await timeline_editor.render_project(project)
     except FileNotFoundError as e:
@@ -53,9 +59,15 @@ async def render_timeline_project(video_id: str, project: TimelineProject):
 
 
 @router.post("/{video_id}/queue")
-async def enqueue_timeline_render(video_id: str, req: TimelineQueueRequest):
+async def enqueue_timeline_render(video_id: str, req: TimelineQueueRequest, request: Request):
     if video_id != req.project.video_id:
         raise HTTPException(status_code=400, detail="video id mismatch")
+    entitlements.require_feature(
+        request,
+        "timeline_render",
+        rights_required=True,
+        metadata={"video_id": video_id, "queued": True, "clips": len(req.project.clips)},
+    )
     try:
         return await render_queue.enqueue(req.project)
     except ValueError as e:
@@ -114,9 +126,15 @@ async def apply_silence_cuts(video_id: str, req: TimelineSilenceCutRequest):
 
 
 @router.post("/{video_id}/hooks", response_model=TimelineHookResponse)
-async def generate_timeline_hooks(video_id: str, req: TimelineHookRequest):
+async def generate_timeline_hooks(video_id: str, req: TimelineHookRequest, request: Request):
     if video_id != req.project.video_id:
         raise HTTPException(status_code=400, detail="video id mismatch")
+    entitlements.require_feature(
+        request,
+        "variant",
+        rights_required=True,
+        metadata={"video_id": video_id, "kind": "hook_generation"},
+    )
     try:
         return await timeline_editor.generate_hook_suggestions(req.project)
     except ValueError as e:
@@ -126,9 +144,15 @@ async def generate_timeline_hooks(video_id: str, req: TimelineHookRequest):
 
 
 @router.post("/{video_id}/smart-crop", response_model=TimelineSmartCropResponse)
-async def apply_smart_crop(video_id: str, req: TimelineSmartCropRequest):
+async def apply_smart_crop(video_id: str, req: TimelineSmartCropRequest, request: Request):
     if video_id != req.project.video_id:
         raise HTTPException(status_code=400, detail="video id mismatch")
+    entitlements.require_feature(
+        request,
+        "process",
+        rights_required=True,
+        metadata={"video_id": video_id, "kind": "smart_crop"},
+    )
     try:
         return await timeline_editor.apply_smart_crop(
             req.project,
@@ -145,9 +169,15 @@ async def apply_smart_crop(video_id: str, req: TimelineSmartCropRequest):
 
 
 @router.post("/{video_id}/cover", response_model=TimelineCoverResponse)
-async def generate_timeline_cover(video_id: str, req: TimelineCoverRequest):
+async def generate_timeline_cover(video_id: str, req: TimelineCoverRequest, request: Request):
     if video_id != req.project.video_id:
         raise HTTPException(status_code=400, detail="video id mismatch")
+    entitlements.require_feature(
+        request,
+        "timeline_render",
+        rights_required=True,
+        metadata={"video_id": video_id, "kind": "cover", "platform": req.platform},
+    )
     try:
         headline = req.headline or req.project.hook_title or req.project.clips[0].title if req.project.clips else ""
         brand_name = req.brand_name or req.project.brand_name

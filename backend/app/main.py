@@ -3,13 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import youtube, videos, process, events, state, editor, timeline, variants
+from app.api import account, youtube, videos, process, events, state, editor, timeline, variants
 from app.auth import authenticate_request
 from app.services import state_store
 from app.services.state_store import init_db
 from app.utils.helpers import find_ffmpeg, find_ytdlp, find_aria2c
-from app.config import get_settings
+from app.config import get_settings, validate_runtime_settings
 import os
+
+settings = validate_runtime_settings()
 
 app = FastAPI(
     title="TikTok Automate",
@@ -19,7 +21,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=get_settings().cors_origins,
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -50,6 +52,7 @@ app.include_router(state.router, prefix="/api/state", tags=["State"])
 app.include_router(editor.router, prefix="/api/editor", tags=["Editor"])
 app.include_router(timeline.router, prefix="/api/timeline", tags=["Timeline"])
 app.include_router(variants.router, prefix="/api/variants", tags=["Variants"])
+app.include_router(account.router, prefix="/api/account", tags=["Account"])
 
 
 @app.get("/api/health")

@@ -1,4 +1,6 @@
 """Persisted video state API."""
+import os
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
@@ -28,6 +30,8 @@ class StateSyncItem(BaseModel):
             return None
         if any(ch in value for ch in "\r\n\0") or ".." in value.replace("\\", "/").split("/"):
             raise ValueError("Invalid path")
+        if os.path.isabs(value) or ":" in value:
+            raise ValueError("Path must be a managed relative filename")
         return value
 
 

@@ -2,6 +2,7 @@ import { API_URL } from "@/types";
 import { getAccessToken, withAccessToken } from "@/lib/auth";
 import type {
   AntiDetectionConfig,
+  AccountStatus,
   AssetLibrary,
   DiscoveryFilters,
   DiscoveryResult,
@@ -18,7 +19,7 @@ import type {
   VariantUploadResponse,
 } from "@/types";
 
-export type { AntiDetectionConfig, AntiDetectionLevel, VideoInfo, JobInfo, JobStatus, DiscoveryFilters, ProcessedVideoFile, AssetLibrary, SubtitleTrack, SubtitleWord, TimelineClip, TimelineCoverResponse, TimelineQueueJob, TimelineHookResponse, TimelineHookSuggestion, TimelineProject, TimelineScoreResponse, TimelineSmartCropResponse, VariantGenerationResponse } from "@/types";
+export type { AntiDetectionConfig, AntiDetectionLevel, AccountStatus, VideoInfo, JobInfo, JobStatus, DiscoveryFilters, ProcessedVideoFile, AssetLibrary, SubtitleTrack, SubtitleWord, TimelineClip, TimelineCoverResponse, TimelineQueueJob, TimelineHookResponse, TimelineHookSuggestion, TimelineProject, TimelineScoreResponse, TimelineSmartCropResponse, VariantGenerationResponse } from "@/types";
 export { DEFAULT_ANTI_DETECTION, DEFAULT_FILTERS } from "@/types";
 
 function filterBody(filters?: Partial<DiscoveryFilters>, pageToken?: string | null) {
@@ -39,6 +40,34 @@ async function authFetch(input: string, init: RequestInit = {}): Promise<Respons
 
 export function videoFileUrl(filename: string, accessToken?: string | null): string {
   return withAccessToken(`${API_URL}/api/videos/file/${encodeURIComponent(filename)}`, accessToken);
+}
+
+export async function getAccountStatus(): Promise<AccountStatus> {
+  const res = await authFetch(`${API_URL}/api/account/status`);
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function updateRightsAttestation(accepted: boolean): Promise<AccountStatus> {
+  const res = await authFetch(`${API_URL}/api/account/rights`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ accepted }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function createCheckoutSession(): Promise<{ id?: string; url?: string }> {
+  const res = await authFetch(`${API_URL}/api/account/billing/checkout`, { method: "POST" });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
+}
+
+export async function createPortalSession(): Promise<{ id?: string; url?: string }> {
+  const res = await authFetch(`${API_URL}/api/account/billing/portal`, { method: "POST" });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return res.json();
 }
 
 /** Extract a human-readable message (FastAPI `detail`) from an error response. */

@@ -1,5 +1,6 @@
 logs/
 *.log
+.tmp/
 data/
 output/
 uploads/

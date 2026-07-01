@@ -1,7 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.models.schemas import SearchRequest, DiscoverRequest, BatchDownloadRequest, DownloadRequest
-from app.services import discovery, downloader
+from app.services import discovery, downloader, entitlements
 from app.services.safety import safe_id, validate_public_video_url
 from app.services.youtube_api import QuotaExceededError
 
@@ -62,14 +62,20 @@ async def discover_content(req: DiscoverRequest):
 
 
 @router.post("/download")
-async def download_video(req: DownloadRequest):
+async def download_video(req: DownloadRequest, request: Request):
     url = validate_public_video_url(req.url)
     video_id = safe_id(req.video_id, "video id")
+    entitlements.require_feature(
+        request,
+        "download",
+        rights_required=True,
+        metadata={"video_id": video_id, "url": url},
+    )
 
     existed_before = bool(downloader.find_merged_file(video_id))
     path = await downloader.download_video(url, video_id, force=req.force)
     if not path:
-        raise HTTPException(status_code=500, detail="Download failed — check ffmpeg is installed")
+        raise HTTPException(status_code=500, detail="Download failed - check ffmpeg is installed")
 
     return {
         "video_id": video_id,
@@ -80,8 +86,15 @@ async def download_video(req: DownloadRequest):
 
 
 @router.post("/batch-download")
-async def batch_download(req: BatchDownloadRequest):
+async def batch_download(req: BatchDownloadRequest, request: Request):
     videos = [(validate_public_video_url(v.url), safe_id(v.video_id, "video id")) for v in req.videos]
+    entitlements.require_feature(
+        request,
+        "download",
+        quantity=len(videos),
+        rights_required=True,
+        metadata={"video_ids": [video_id for _url, video_id in videos]},
+    )
     results = await downloader.batch_download(videos, req.max_concurrent)
     successful = {k: v for k, v in results.items() if v is not None}
     failed = [k for k, v in results.items() if v is None]

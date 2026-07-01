@@ -1,5 +1,5 @@
 """Subtitle editor API."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from app.models.schemas import (
@@ -10,7 +10,7 @@ from app.models.schemas import (
     SubtitleTrack,
     SubtitleTranslateRequest,
 )
-from app.services import subtitle_editor
+from app.services import entitlements, subtitle_editor
 
 router = APIRouter()
 
@@ -47,8 +47,14 @@ async def import_subtitle_track(video_id: str, req: SubtitleImportRequest):
 
 
 @router.post("/subtitles/{video_id}/transcribe")
-async def transcribe_subtitle_track(video_id: str, req: SubtitleTranscribeRequest | None = None):
+async def transcribe_subtitle_track(video_id: str, request: Request, req: SubtitleTranscribeRequest | None = None):
     payload = req or SubtitleTranscribeRequest()
+    entitlements.require_feature(
+        request,
+        "transcription",
+        rights_required=True,
+        metadata={"video_id": video_id, "provider": payload.provider, "language": payload.language},
+    )
     try:
         return await subtitle_editor.transcribe_track(
             video_id,
@@ -107,7 +113,13 @@ async def translate_subtitle_track(video_id: str, req: SubtitleTranslateRequest)
 
 
 @router.post("/subtitles/{video_id}/render", response_model=SubtitleRenderResponse)
-async def render_subtitle_track(video_id: str):
+async def render_subtitle_track(video_id: str, request: Request):
+    entitlements.require_feature(
+        request,
+        "timeline_render",
+        rights_required=True,
+        metadata={"video_id": video_id, "kind": "subtitle_render"},
+    )
     try:
         return await subtitle_editor.render_video(video_id)
     except FileNotFoundError as e:

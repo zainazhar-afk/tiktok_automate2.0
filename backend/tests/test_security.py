@@ -1,7 +1,9 @@
 from fastapi.testclient import TestClient
+from types import SimpleNamespace
 
 from app.main import app
-from app.services import safety
+from app.config import validate_runtime_settings
+from app.services import discovery, entitlements, safety, state_store
 
 
 class DummySafetySettings:
@@ -13,6 +15,30 @@ class DummyAuthSettings:
     service_api_key = ""
     supabase_jwks_url = "https://example.supabase.co/auth/v1/.well-known/jwks.json"
     supabase_url = "https://example.supabase.co"
+
+
+class DummyEntitlementSettings:
+    billing_required = True
+    require_rights_attestation = False
+    default_plan = "pro"
+    allowed_subscription_statuses = {"active", "trialing"}
+    monthly_download_limit = 1
+    monthly_process_limit = 1
+    monthly_transcription_limit = 1
+    monthly_variant_limit = 1
+    monthly_timeline_render_limit = 1
+    stripe_secret_key = ""
+    stripe_price_id = ""
+    stripe_webhook_secret = ""
+    stripe_portal_return_url = ""
+    app_url = "http://localhost:3001"
+
+
+class DummyRuntimeSettings:
+    app_environment = "production"
+    require_auth = False
+    supabase_url = ""
+    supabase_jwks_url = ""
 
 
 def test_safe_id_rejects_path_traversal():
@@ -77,3 +103,96 @@ def test_auth_middleware_rejects_api_without_token_when_enabled(monkeypatch):
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Authentication required"
+
+
+def test_production_runtime_requires_auth_and_supabase_jwks():
+    try:
+        validate_runtime_settings(DummyRuntimeSettings())
+    except RuntimeError as exc:
+        assert "REQUIRE_AUTH" in str(exc)
+    else:
+        raise AssertionError("production settings allowed auth to be disabled")
+
+    valid = DummyRuntimeSettings()
+    valid.require_auth = True
+    valid.supabase_url = "https://example.supabase.co"
+    valid.supabase_jwks_url = "https://example.supabase.co/auth/v1/.well-known/jwks.json"
+    assert validate_runtime_settings(valid) is valid
+
+
+def test_entitlement_blocks_unpaid_user_when_billing_required(tmp_path, monkeypatch):
+    db_path = tmp_path / "state.db"
+    monkeypatch.setattr(state_store, "DB_PATH", str(db_path))
+    monkeypatch.setattr(entitlements, "get_settings", lambda: DummyEntitlementSettings())
+    state_store.init_db()
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            user=SimpleNamespace(
+                user_id="user_1",
+                email="u@example.com",
+                role="authenticated",
+                plan="",
+                subscription_status="",
+                stripe_customer_id="",
+            )
+        )
+    )
+
+    try:
+        entitlements.require_feature(request, "download")
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 402
+    else:
+        raise AssertionError("unpaid user was allowed")
+
+
+def test_entitlement_records_and_enforces_monthly_usage(tmp_path, monkeypatch):
+    class Settings(DummyEntitlementSettings):
+        billing_required = False
+        require_rights_attestation = False
+
+    db_path = tmp_path / "state.db"
+    monkeypatch.setattr(state_store, "DB_PATH", str(db_path))
+    monkeypatch.setattr(entitlements, "get_settings", lambda: Settings())
+    state_store.init_db()
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            user=SimpleNamespace(
+                user_id="user_2",
+                email="u2@example.com",
+                role="authenticated",
+                plan="pro",
+                subscription_status="active",
+                stripe_customer_id="",
+            )
+        )
+    )
+
+    entitlements.require_feature(request, "download")
+    try:
+        entitlements.require_feature(request, "download")
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 429
+    else:
+        raise AssertionError("over-quota user was allowed")
+
+
+def test_fallback_search_passes_query_as_subprocess_argument(monkeypatch):
+    captured = {}
+
+    def fake_run_command(cmd, timeout=60):
+        captured["cmd"] = cmd
+        return 1, "", ""
+
+    monkeypatch.setattr(discovery, "find_python", lambda: "python")
+    monkeypatch.setattr(discovery, "run_command", fake_run_command)
+
+    query = "safe'; import os; os.system('bad') #"
+    discovery._fallback_search(query, 3)
+
+    cmd = captured["cmd"]
+    assert cmd[:3] == ["python", "-c", cmd[2]]
+    assert query == cmd[3]
+    assert query not in cmd[2]

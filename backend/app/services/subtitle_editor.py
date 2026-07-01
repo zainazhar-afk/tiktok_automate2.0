@@ -498,8 +498,17 @@ def source_video_path(video_id: str) -> Optional[str]:
             return path
     video = state_store.get_video(video_id) or {}
     output = video.get("output_path")
-    if output and os.path.isfile(output):
-        return output
+    if output:
+        output_path = Path(output)
+        if not output_path.is_absolute():
+            output_path = Path(OUTPUT_DIR) / output_path.name
+        try:
+            resolved = output_path.resolve()
+            output_root = Path(OUTPUT_DIR).resolve()
+            if resolved.parent == output_root and resolved.is_file():
+                return str(resolved)
+        except OSError:
+            return None
     return None
 
 

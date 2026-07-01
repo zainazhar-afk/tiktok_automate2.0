@@ -185,23 +185,25 @@ def _fallback_search(query: str, max_results: int) -> list[dict]:
     python = find_python()
     if not python:
         return []
-    script = f"""
+    script = """
 import json, sys
 try:
     from yt_dlp import YoutubeDL
-    opts = {{'quiet': True, 'no_warnings': True, 'ignoreerrors': True,
+    query = sys.argv[1]
+    max_results = int(sys.argv[2])
+    opts = {'quiet': True, 'no_warnings': True, 'ignoreerrors': True,
            'match_filter': lambda x: 15 <= (x.get('duration') or 0) <= 90,
-           'extract_flat': True}}
+           'extract_flat': True}
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(f'ytsearch{max_results}:{query} shorts', download=False)
         if info and 'entries' in info:
             for e in info['entries']:
                 if e:
-                    print(json.dumps({{k: e.get(k) for k in ['id','title','channel','uploader','duration','view_count','thumbnail','webpage_url']}}))
+                    print(json.dumps({k: e.get(k) for k in ['id','title','channel','uploader','duration','view_count','thumbnail','webpage_url']}))
 except Exception as e:
-    print(json.dumps({{'error': str(e)}}), file=sys.stderr)
+    print(json.dumps({'error': str(e)}), file=sys.stderr)
 """
-    rc, stdout, _ = run_command([python, "-c", script], timeout=60)
+    rc, stdout, _ = run_command([python, "-c", script, query, str(max_results)], timeout=60)
     return _parse_ytdlp_info(stdout) if rc == 0 else []
 
 

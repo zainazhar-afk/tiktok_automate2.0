@@ -1,12 +1,36 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { getAccountStatus, type AccountStatus } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 export default function Navbar() {
   const pathname = usePathname();
   const auth = useAuth();
+  const [account, setAccount] = useState<AccountStatus | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const timer = setTimeout(() => {
+      if (auth.enabled && !auth.user) {
+        if (mounted) setAccount(null);
+        return;
+      }
+      getAccountStatus()
+        .then((next) => {
+          if (mounted) setAccount(next);
+        })
+        .catch(() => {
+          if (mounted) setAccount(null);
+        });
+    }, 0);
+    return () => {
+      mounted = false;
+      clearTimeout(timer);
+    };
+  }, [auth.enabled, auth.user]);
 
   return (
     <nav className="border-b border-gray-800 bg-gray-950/80 backdrop-blur sticky top-0 z-50">
@@ -26,6 +50,7 @@ export default function Navbar() {
             { href: "/editor", label: "Editor" },
             { href: "/variants", label: "Variants" },
             { href: "/export", label: "Export" },
+            { href: "/account", label: "Account" },
           ].map((link) => (
             <Link
               key={link.href}
@@ -39,6 +64,13 @@ export default function Navbar() {
               {link.label}
             </Link>
           ))}
+          {account && (
+            <span className={`ml-1 rounded px-2 py-1 text-[11px] font-medium ${
+              account.subscription_active ? "bg-green-600/20 text-green-200" : "bg-yellow-600/20 text-yellow-200"
+            }`}>
+              {account.plan}
+            </span>
+          )}
           {auth.enabled && auth.user && (
             <div className="ml-2 flex items-center gap-2 border-l border-gray-800 pl-3">
               <span className="max-w-40 truncate text-xs text-gray-400">
