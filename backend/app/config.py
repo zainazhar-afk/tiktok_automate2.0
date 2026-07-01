@@ -24,7 +24,7 @@ class Settings:
     )
     max_upload_mb: int = int(os.getenv("MAX_UPLOAD_MB", "1024"))
     max_download_mb: int = int(os.getenv("MAX_DOWNLOAD_MB", "1024"))
-    max_source_duration_seconds: int = int(os.getenv("MAX_SOURCE_DURATION_SECONDS", "1800"))
+    max_source_duration_seconds: int = int(os.getenv("MAX_SOURCE_DURATION_SECONDS", "14400"))
     billing_required: bool = os.getenv("BILLING_REQUIRED", "false").lower() in {"1", "true", "yes"}
     require_rights_attestation: bool = os.getenv("REQUIRE_RIGHTS_ATTESTATION", "false").lower() in {"1", "true", "yes"}
     default_plan: str = os.getenv("DEFAULT_PLAN", "pro")

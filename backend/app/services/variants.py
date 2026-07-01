@@ -17,6 +17,7 @@ from app.utils.helpers import find_ffmpeg, run_command
 OUTPUT_DIR = os.path.abspath("output")
 SAFE_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 _source_jobs: dict[str, dict] = {}
+VARIANT_SOURCE_FORMAT = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]/best"
 
 
 def _safe_upload_id(upload_id: str) -> str:
@@ -80,7 +81,15 @@ async def create_source_from_url(url: str) -> dict:
     clean_url = validate_public_video_url(url)
 
     upload_id = new_upload_id()
-    path = await downloader.download_video(clean_url, upload_id, force=True, timeout=1200)
+    path = await downloader.download_video(
+        clean_url,
+        upload_id,
+        force=True,
+        timeout=1200,
+        raise_on_error=True,
+        format_selector=VARIANT_SOURCE_FORMAT,
+        use_external_downloader=False,
+    )
     if not path:
         raise RuntimeError("Video download failed. Use a public video URL supported by yt-dlp.")
     return register_source(upload_id, os.path.basename(path), url=clean_url, path=path)
@@ -159,11 +168,16 @@ async def download_source_job(upload_id: str, url: str, owner_id: str = "local-d
             force=True,
             timeout=1200,
             progress_callback=progress_callback,
+            raise_on_error=True,
+            format_selector=VARIANT_SOURCE_FORMAT,
+            use_external_downloader=False,
         )
         if not path:
             update("failed", 0.0, "Download failed", "Video download failed")
             return
         update("completed", 1.0, "Source ready", filename=os.path.basename(path))
+    except downloader.DownloadError as e:
+        update("failed", 0.0, "Download failed", str(e))
     except Exception as e:
         update("failed", 0.0, "Download failed", str(e))
     finally:
