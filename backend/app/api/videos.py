@@ -4,6 +4,7 @@ import os
 import glob as glob_module
 import mimetypes
 from pathlib import Path
+from datetime import datetime
 
 from app.config import get_settings
 from app.services import entitlements, state_store
@@ -77,6 +78,51 @@ def _filename_owned(filename: str, owner_id: str) -> bool:
     return False
 
 
+def _row_modified(row: dict) -> float:
+    updated = row.get("updated_at")
+    if not updated:
+        return 0.0
+    try:
+        return datetime.fromisoformat(str(updated)).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _video_payload(
+    *,
+    filename: str,
+    path: str | None,
+    vid: str,
+    meta: dict,
+    visibility_status: str = "available",
+    unavailable_reason: str = "",
+) -> dict:
+    size_mb = 0.0
+    modified = _row_modified(meta)
+    if path:
+        try:
+            stat = os.stat(path)
+            size_mb = round(stat.st_size / (1024 * 1024), 2)
+            modified = stat.st_mtime
+        except OSError:
+            pass
+    cover = meta.get("thumbnail_path")
+    cover_filename = os.path.basename(cover) if cover else f"{vid}_cover.jpg"
+    return {
+        "id": meta.get("video_id") or vid,
+        "filename": filename,
+        "path": filename,
+        "size_mb": size_mb,
+        "modified": modified,
+        "title": meta.get("title") or meta.get("video_id") or vid,
+        "caption": meta.get("caption"),
+        "hashtags": meta.get("hashtags", []),
+        "visibility_status": visibility_status,
+        "unavailable_reason": unavailable_reason,
+        "cover_filename": cover_filename if os.path.exists(os.path.join(OUTPUT_DIR, cover_filename)) else None,
+    }
+
+
 def _list_audio_assets(directory: str) -> list[str]:
     root = Path(directory).resolve()
     if not root.is_dir():
@@ -98,9 +144,6 @@ async def list_videos(request: Request, type: str = "processed"):
         directory = DOWNLOAD_DIR
         patterns = ["*.mp4"]
 
-    if not os.path.exists(directory):
-        return {"videos": [], "total": 0}
-
     persisted_rows = _owned_media_rows(owner_id)
     persisted = {v["video_id"]: v for v in persisted_rows}
     filename_meta = {
@@ -110,10 +153,11 @@ async def list_videos(request: Request, type: str = "processed"):
     }
     videos = []
     files = []
-    for pattern in patterns:
-        files.extend(glob_module.glob(os.path.join(directory, pattern)))
+    if os.path.exists(directory):
+        for pattern in patterns:
+            files.extend(glob_module.glob(os.path.join(directory, pattern)))
+    seen_filenames: set[str] = set()
     for f in sorted(set(files), key=os.path.getmtime, reverse=True):
-        stat = os.stat(f)
         vid = (
             os.path.basename(f)
             .replace("_processed.mp4", "")
@@ -125,20 +169,25 @@ async def list_videos(request: Request, type: str = "processed"):
         meta = filename_meta.get(filename) or persisted.get(vid) or {}
         if not meta and not can_see_legacy(owner_id):
             continue
-        cover = meta.get("thumbnail_path")
-        cover_filename = os.path.basename(cover) if cover else f"{vid}_cover.jpg"
-        videos.append({
-            "id": meta.get("video_id") or vid,
-            "filename": filename,
-            "path": filename,
-            "size_mb": round(stat.st_size / (1024 * 1024), 2),
-            "modified": stat.st_mtime,
-            "title": meta.get("title") or meta.get("video_id") or vid,
-            "caption": meta.get("caption"),
-            "hashtags": meta.get("hashtags", []),
-            "visibility_status": "available",
-            "cover_filename": cover_filename if os.path.exists(os.path.join(OUTPUT_DIR, cover_filename)) else None,
-        })
+        seen_filenames.add(filename)
+        videos.append(_video_payload(filename=filename, path=f, vid=vid, meta=meta))
+
+    path_key = "output_path" if type == "processed" else "download_path"
+    for row in persisted_rows:
+        media_path = row.get(path_key)
+        if not media_path:
+            continue
+        filename = os.path.basename(media_path)
+        if filename in seen_filenames:
+            continue
+        videos.append(_video_payload(
+            filename=filename,
+            path=None,
+            vid=str(row.get("video_id") or filename),
+            meta=row,
+            visibility_status="unavailable",
+            unavailable_reason="The generated file is missing from storage. Re-render or refresh after storage sync.",
+        ))
 
     return {"videos": videos, "total": len(videos)}
 
