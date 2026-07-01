@@ -1,8 +1,7 @@
 """
 Auto subtitle generation via Deepgram or faster-whisper.
 
-Deepgram is used first when DEEPGRAM_API_KEYS are configured. If it is not
-configured, quota-limited, or fails, faster-whisper is used as a local fallback.
+Configured API providers are tried first, then faster-whisper is used as a local fallback.
 If faster-whisper isn't installed, generation is skipped gracefully so the rest
 of the processing pipeline keeps working. Install with:
     pip install faster-whisper
@@ -47,6 +46,11 @@ def _normalize_provider(value: str | None) -> str:
 
 
 def _groq_language(value: str | None) -> str:
+    language = _normalize_language(value)
+    return "" if language == "multi" else language
+
+
+def _api_language(value: str | None) -> str:
     language = _normalize_language(value)
     return "" if language == "multi" else language
 
@@ -335,7 +339,7 @@ def _deepgram_cues(payload: dict) -> list[dict]:
     return cues
 
 
-async def _deepgram_to_srt(input_path: str, srt_path: str, language: str = "") -> bool:
+async def _deepgram_to_srt(input_path: str, srt_path: str, video_id: str, language: str = "") -> bool:
     global _deepgram_key_offset
 
     settings = get_settings()
@@ -343,9 +347,10 @@ async def _deepgram_to_srt(input_path: str, srt_path: str, language: str = "") -
     if not keys:
         return False
 
+    audio_path = await _compressed_audio_path(input_path, video_id)
     ordered = keys[_deepgram_key_offset:] + keys[:_deepgram_key_offset]
-    mime = mimetypes.guess_type(input_path)[0] or "application/octet-stream"
-    selected_language = _normalize_language(language)
+    mime = mimetypes.guess_type(audio_path)[0] or "audio/mpeg"
+    selected_language = _api_language(language)
     params = {
         "model": settings.deepgram_model,
         "smart_format": "true",
@@ -357,7 +362,7 @@ async def _deepgram_to_srt(input_path: str, srt_path: str, language: str = "") -
         params["language"] = selected_language
     else:
         params["detect_language"] = "true"
-    with open(input_path, "rb") as f:
+    with open(audio_path, "rb") as f:
         media = f.read()
 
     async with httpx.AsyncClient(timeout=300) as client:
@@ -431,13 +436,11 @@ async def generate_subtitles(
     selected_language = _normalize_language(language)
     groq_language = selected_language if explicit_language else _normalize_language(settings.groq_language)
     deepgram_language = selected_language if explicit_language else _normalize_language(settings.deepgram_language)
-    whisper_language = selected_language if explicit_language else ""
+    whisper_language = _api_language(selected_language) if explicit_language else ""
 
     async def usable(provider_name: str) -> bool:
         if not os.path.exists(srt_path):
             return False
-        if selected_provider != "auto":
-            return True
         ok = await _srt_looks_usable(srt_path, input_path, provider_name)
         if not ok:
             try:
@@ -455,7 +458,7 @@ async def generate_subtitles(
             return None
 
     if selected_provider in {"auto", "deepgram"} and settings.deepgram_api_keys:
-        ok = await _deepgram_to_srt(input_path, srt_path, deepgram_language)
+        ok = await _deepgram_to_srt(input_path, srt_path, video_id, deepgram_language)
         if ok and await usable("Deepgram"):
             return srt_path
         if selected_provider == "deepgram":
