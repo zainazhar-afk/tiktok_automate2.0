@@ -289,7 +289,7 @@ export default function ExportPanel() {
       )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {filteredVideos.map((video) => {
+        {filteredVideos.map((video, index) => {
           const hashtagText = (video.hashtags || []).join(" ");
           const captionBlock = [video.caption, hashtagText].filter(Boolean).join("\n\n");
           const videoUrl = videoFileUrl(video.filename, accessToken);
@@ -301,7 +301,7 @@ export default function ExportPanel() {
           const coverDownloadEnabled = Boolean(video.cover_filename && coverUrl && !coverFailed && readiness.state !== "blocked");
 
           return (
-            <div key={video.filename} className="overflow-hidden rounded-lg border border-gray-700 bg-gray-900">
+            <div key={`${video.id}-${video.filename}-${index}`} className="overflow-hidden rounded-lg border border-gray-700 bg-gray-900">
               <div className="grid grid-cols-2 gap-0">
                 <div className="aspect-[9/16] bg-gray-950">
                   {readiness.state === "blocked" || videoFailed ? (

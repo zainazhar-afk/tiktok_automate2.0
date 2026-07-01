@@ -670,9 +670,9 @@ export default function TimelineCropEditor() {
                 </div>
               </div>
             )}
-            {videos.map((video) => (
+            {videos.map((video, index) => (
               <button
-                key={video.filename}
+                key={`${video.id}-${video.filename}-${index}`}
                 onClick={() => setActiveId(video.id)}
                 className={`w-full rounded border p-2 text-left text-xs transition ${
                   activeId === video.id
@@ -953,8 +953,8 @@ export default function TimelineCropEditor() {
                       className="rounded border border-gray-700 bg-gray-950 px-2 py-2 text-gray-200"
                     >
                       <option value="">No B-roll</option>
-                      {brollVideos.map((video) => (
-                        <option key={video.filename} value={video.filename}>
+                      {brollVideos.map((video, index) => (
+                        <option key={`${video.id}-${video.filename}-${index}`} value={video.filename}>
                           {video.title || video.filename}
                         </option>
                       ))}

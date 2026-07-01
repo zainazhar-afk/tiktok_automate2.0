@@ -508,9 +508,9 @@ export default function SubtitleEditor() {
                 </div>
               </div>
             )}
-            {videos.map((video) => (
+            {videos.map((video, index) => (
               <button
-                key={video.filename}
+                key={`${video.id}-${video.filename}-${index}`}
                 onClick={() => setActiveId(video.id)}
                 className={`w-full rounded border p-2 text-left text-xs transition ${
                   activeId === video.id
