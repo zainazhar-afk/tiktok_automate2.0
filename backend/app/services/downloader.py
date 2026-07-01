@@ -12,6 +12,7 @@ from typing import Callable
 
 from app.config import get_settings
 from app.services.safety import safe_id, validate_public_video_url
+from app.tenant import storage_video_id
 from app.utils.helpers import find_ytdlp, find_aria2c, find_ffmpeg, run_command
 
 logger = logging.getLogger(__name__)
@@ -23,8 +24,9 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 def find_merged_file(video_id: str) -> Optional[str]:
     """Return path only if a fully merged video file exists."""
     video_id = safe_id(video_id, "video id")
+    file_id = storage_video_id(video_id)
     for ext in ["mp4", "webm", "mkv"]:
-        path = os.path.join(DOWNLOAD_DIR, f"{video_id}.{ext}")
+        path = os.path.join(DOWNLOAD_DIR, f"{file_id}.{ext}")
         if os.path.isfile(path) and os.path.getsize(path) > 100_000:
             return path
     return None
@@ -32,16 +34,18 @@ def find_merged_file(video_id: str) -> Optional[str]:
 
 def _has_fragments(video_id: str) -> bool:
     video_id = safe_id(video_id, "video id")
+    file_id = storage_video_id(video_id)
     for f in os.listdir(DOWNLOAD_DIR):
-        if f.startswith(video_id) and (".f" in f or f.endswith(".m4a")):
+        if f.startswith(file_id) and (".f" in f or f.endswith(".m4a")):
             return True
     return False
 
 
 def _cleanup_fragments(video_id: str):
     video_id = safe_id(video_id, "video id")
+    file_id = storage_video_id(video_id)
     for f in os.listdir(DOWNLOAD_DIR):
-        if f.startswith(video_id) and f != f"{video_id}.mp4":
+        if f.startswith(file_id) and f != f"{file_id}.mp4":
             try:
                 os.remove(os.path.join(DOWNLOAD_DIR, f))
             except OSError:
@@ -132,8 +136,8 @@ async def download_video(
     aria2c = find_aria2c()
     _cleanup_fragments(video_id)
 
-    output_template = os.path.join(DOWNLOAD_DIR, f"{video_id}.%(ext)s")
-    expected_path = os.path.join(DOWNLOAD_DIR, f"{video_id}.mp4")
+    file_id = storage_video_id(video_id)
+    output_template = os.path.join(DOWNLOAD_DIR, f"{file_id}.%(ext)s")
 
     cmd = [
         ytdlp, url,
@@ -217,8 +221,9 @@ async def batch_download(
 
 def cleanup_download(video_id: str):
     video_id = safe_id(video_id, "video id")
+    file_id = storage_video_id(video_id)
     for f in os.listdir(DOWNLOAD_DIR):
-        if f.startswith(video_id):
+        if f.startswith(file_id):
             try:
                 os.remove(os.path.join(DOWNLOAD_DIR, f))
             except OSError:

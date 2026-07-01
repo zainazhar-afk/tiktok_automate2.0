@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.config import get_settings
+from app.tenant import can_see_legacy, current_owner_id
 
 try:
     import psycopg
@@ -96,10 +97,188 @@ def _decode_state_row(row) -> dict:
     return d
 
 
+def _ensure_column(conn, table: str, column: str, definition: str):
+    if _use_postgres():
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {definition}")
+        return
+    cols = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    names = {col["name"] if isinstance(col, sqlite3.Row) else col[1] for col in cols}
+    if column not in names:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _primary_key_columns(conn, table: str) -> list[str]:
+    if _use_postgres():
+        rows = conn.execute(
+            """
+            SELECT kcu.column_name
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+              ON tc.constraint_name = kcu.constraint_name
+             AND tc.table_schema = kcu.table_schema
+            WHERE tc.table_name = %s
+              AND tc.constraint_type = 'PRIMARY KEY'
+            ORDER BY kcu.ordinal_position
+            """,
+            (table,),
+        ).fetchall()
+        return [row["column_name"] for row in rows]
+
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    pk_rows = [row for row in rows if (row["pk"] if isinstance(row, sqlite3.Row) else row[5])]
+    return [
+        row["name"] if isinstance(row, sqlite3.Row) else row[1]
+        for row in sorted(pk_rows, key=lambda item: item["pk"] if isinstance(item, sqlite3.Row) else item[5])
+    ]
+
+
+def _migrate_sqlite_owner_pk(conn, table: str, column_sql: str, copy_columns: list[str]):
+    pk = _primary_key_columns(conn, table)
+    if pk == ["owner_id", "video_id"]:
+        return
+    if pk and pk != ["video_id"]:
+        return
+
+    tmp = f"{table}_owner_migration"
+    columns = ", ".join(copy_columns)
+    conn.execute(f"DROP TABLE IF EXISTS {tmp}")
+    conn.execute(f"CREATE TABLE {tmp} ({column_sql}, PRIMARY KEY (owner_id, video_id))")
+    conn.execute(
+        f"""
+        INSERT OR REPLACE INTO {tmp} ({columns})
+        SELECT {columns} FROM {table}
+        """
+    )
+    conn.execute(f"DROP TABLE {table}")
+    conn.execute(f"ALTER TABLE {tmp} RENAME TO {table}")
+
+
+def _migrate_postgres_owner_pk(conn, table: str):
+    pk = _primary_key_columns(conn, table)
+    if pk == ["owner_id", "video_id"]:
+        return
+    conn.execute(
+        f"""
+        DO $$
+        DECLARE pk_name text;
+        BEGIN
+          SELECT tc.constraint_name INTO pk_name
+          FROM information_schema.table_constraints tc
+          WHERE tc.table_name = '{table}' AND tc.constraint_type = 'PRIMARY KEY'
+          LIMIT 1;
+          IF pk_name IS NOT NULL THEN
+            EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', '{table}', pk_name);
+          END IF;
+          EXECUTE format('ALTER TABLE %I ADD PRIMARY KEY (owner_id, video_id)', '{table}');
+        END $$;
+        """
+    )
+
+
+def _migrate_owner_primary_keys(conn):
+    video_cols = """
+        video_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL DEFAULT 'local-dev',
+        title TEXT,
+        channel TEXT,
+        status TEXT DEFAULT 'discovered',
+        download_path TEXT,
+        output_path TEXT,
+        thumbnail_path TEXT,
+        caption TEXT,
+        hashtags TEXT,
+        error TEXT,
+        metadata TEXT,
+        updated_at TEXT
+    """
+    subtitle_cols = """
+        video_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL DEFAULT 'local-dev',
+        language TEXT DEFAULT 'en',
+        style TEXT DEFAULT 'default',
+        position TEXT DEFAULT 'bottom',
+        animation TEXT DEFAULT 'none',
+        transcript TEXT,
+        words TEXT,
+        updated_at TEXT
+    """
+    timeline_cols = """
+        video_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL DEFAULT 'local-dev',
+        project TEXT,
+        updated_at TEXT
+    """
+    if _use_postgres():
+        for table in ["video_state", "subtitle_tracks", "timeline_projects"]:
+            _migrate_postgres_owner_pk(conn, table)
+    else:
+        _migrate_sqlite_owner_pk(
+            conn,
+            "video_state",
+            video_cols,
+            [
+                "video_id",
+                "owner_id",
+                "title",
+                "channel",
+                "status",
+                "download_path",
+                "output_path",
+                "thumbnail_path",
+                "caption",
+                "hashtags",
+                "error",
+                "metadata",
+                "updated_at",
+            ],
+        )
+        _migrate_sqlite_owner_pk(
+            conn,
+            "subtitle_tracks",
+            subtitle_cols,
+            [
+                "video_id",
+                "owner_id",
+                "language",
+                "style",
+                "position",
+                "animation",
+                "transcript",
+                "words",
+                "updated_at",
+            ],
+        )
+        _migrate_sqlite_owner_pk(
+            conn,
+            "timeline_projects",
+            timeline_cols,
+            ["video_id", "owner_id", "project", "updated_at"],
+        )
+
+
+def _owner_filter_sql(table_alias: str = "", *, owner_id: str | None = None) -> tuple[str, list[str]]:
+    owner = owner_id or current_owner_id()
+    prefix = f"{table_alias}." if table_alias else ""
+    if can_see_legacy(owner):
+        return (
+            f"({prefix}owner_id = {{ph}} OR {prefix}owner_id = 'local-dev' "
+            f"OR {prefix}owner_id IS NULL OR {prefix}owner_id = '')"
+        ), [owner]
+    return f"{prefix}owner_id = {{ph}}", [owner]
+
+
+def _conflicting_owner(row, owner_id: str) -> bool:
+    if not row:
+        return False
+    row_owner = _row_dict(row).get("owner_id")
+    return bool(row_owner and row_owner != owner_id and not can_see_legacy(owner_id))
+
+
 def _create_schema(conn):
     conn.execute("""
         CREATE TABLE IF NOT EXISTS video_state (
-            video_id TEXT PRIMARY KEY,
+            video_id TEXT NOT NULL,
+            owner_id TEXT NOT NULL DEFAULT 'local-dev',
             title TEXT,
             channel TEXT,
             status TEXT DEFAULT 'discovered',
@@ -110,26 +289,31 @@ def _create_schema(conn):
             hashtags TEXT,
             error TEXT,
             metadata TEXT,
-            updated_at TEXT
+            updated_at TEXT,
+            PRIMARY KEY (owner_id, video_id)
         )
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS subtitle_tracks (
-            video_id TEXT PRIMARY KEY,
+            video_id TEXT NOT NULL,
+            owner_id TEXT NOT NULL DEFAULT 'local-dev',
             language TEXT DEFAULT 'en',
             style TEXT DEFAULT 'default',
             position TEXT DEFAULT 'bottom',
             animation TEXT DEFAULT 'none',
             transcript TEXT,
             words TEXT,
-            updated_at TEXT
+            updated_at TEXT,
+            PRIMARY KEY (owner_id, video_id)
         )
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS timeline_projects (
-            video_id TEXT PRIMARY KEY,
+            video_id TEXT NOT NULL,
+            owner_id TEXT NOT NULL DEFAULT 'local-dev',
             project TEXT,
-            updated_at TEXT
+            updated_at TEXT,
+            PRIMARY KEY (owner_id, video_id)
         )
     """)
     conn.execute("""
@@ -157,6 +341,13 @@ def _create_schema(conn):
         CREATE INDEX IF NOT EXISTS idx_usage_owner_type_created
         ON usage_events(owner_id, event_type, created_at)
     """)
+    _ensure_column(conn, "video_state", "owner_id", "TEXT DEFAULT 'local-dev'")
+    _ensure_column(conn, "subtitle_tracks", "owner_id", "TEXT DEFAULT 'local-dev'")
+    _ensure_column(conn, "timeline_projects", "owner_id", "TEXT DEFAULT 'local-dev'")
+    conn.execute("UPDATE video_state SET owner_id = 'local-dev' WHERE owner_id IS NULL OR owner_id = ''")
+    conn.execute("UPDATE subtitle_tracks SET owner_id = 'local-dev' WHERE owner_id IS NULL OR owner_id = ''")
+    conn.execute("UPDATE timeline_projects SET owner_id = 'local-dev' WHERE owner_id IS NULL OR owner_id = ''")
+    _migrate_owner_primary_keys(conn)
     conn.commit()
 
 
@@ -177,6 +368,7 @@ def init_db():
 def upsert_video(
     video_id: str,
     *,
+    owner_id: Optional[str] = None,
     title: str = "",
     channel: str = "",
     status: Optional[str] = None,
@@ -189,10 +381,11 @@ def upsert_video(
     metadata: Optional[dict] = None,
 ):
     now = datetime.now(timezone.utc).isoformat()
+    owner = owner_id or current_owner_id()
     ph = _ph()
     with _conn() as conn:
         row = conn.execute(
-            f"SELECT * FROM video_state WHERE video_id = {ph}", (video_id,)
+            f"SELECT * FROM video_state WHERE video_id = {ph} AND owner_id = {ph}", (video_id, owner)
         ).fetchone()
 
         fields = {
@@ -212,11 +405,12 @@ def upsert_video(
         if row is None:
             conn.execute(
                 """INSERT INTO video_state
-                   (video_id, title, channel, status, download_path, output_path,
+                   (video_id, owner_id, title, channel, status, download_path, output_path,
                     thumbnail_path, caption, hashtags, error, metadata, updated_at)
-                   VALUES ({0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0})""".format(ph),
+                   VALUES ({0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0})""".format(ph),
                 (
                     video_id,
+                    owner,
                     title,
                     channel,
                     status or "discovered",
@@ -238,42 +432,49 @@ def upsert_video(
                     updates.append(f"{key} = {ph}")
                     values.append(val)
             if updates:
-                values.append(video_id)
+                values.extend([video_id, owner])
                 conn.execute(
-                    f"UPDATE video_state SET {', '.join(updates)} WHERE video_id = {ph}",
+                    f"UPDATE video_state SET {', '.join(updates)} WHERE video_id = {ph} AND owner_id = {ph}",
                     values,
                 )
         conn.commit()
 
 
-def get_video(video_id: str) -> Optional[dict]:
+def get_video(video_id: str, *, owner_id: Optional[str] = None) -> Optional[dict]:
     ph = _ph()
+    owner_clause, owner_values = _owner_filter_sql(owner_id=owner_id)
+    owner_clause = owner_clause.format(ph=ph)
     with _conn() as conn:
         row = conn.execute(
-            f"SELECT * FROM video_state WHERE video_id = {ph}", (video_id,)
+            f"SELECT * FROM video_state WHERE video_id = {ph} AND {owner_clause}",
+            (video_id, *owner_values),
         ).fetchone()
     if not row:
         return None
     return _decode_state_row(row)
 
 
-def list_videos(status: Optional[str] = None) -> list[dict]:
+def list_videos(status: Optional[str] = None, *, owner_id: Optional[str] = None) -> list[dict]:
     ph = _ph()
+    owner_clause, owner_values = _owner_filter_sql(owner_id=owner_id)
+    owner_clause = owner_clause.format(ph=ph)
     with _conn() as conn:
         if status:
             rows = conn.execute(
-                f"SELECT * FROM video_state WHERE status = {ph} ORDER BY updated_at DESC",
-                (status,),
+                f"SELECT * FROM video_state WHERE status = {ph} AND {owner_clause} ORDER BY updated_at DESC",
+                (status, *owner_values),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM video_state ORDER BY updated_at DESC"
+                f"SELECT * FROM video_state WHERE {owner_clause} ORDER BY updated_at DESC",
+                tuple(owner_values),
             ).fetchall()
     return [_decode_state_row(row) for row in rows]
 
 
-def save_subtitle_track(video_id: str, track: dict):
+def save_subtitle_track(video_id: str, track: dict, *, owner_id: Optional[str] = None):
     now = datetime.now(timezone.utc).isoformat()
+    owner = owner_id or current_owner_id()
     words = track.get("words") or []
     transcript = track.get("transcript")
     if transcript is None:
@@ -283,9 +484,9 @@ def save_subtitle_track(video_id: str, track: dict):
     with _conn() as conn:
         conn.execute(
             """INSERT INTO subtitle_tracks
-               (video_id, language, style, position, animation, transcript, words, updated_at)
-               VALUES ({0}, {0}, {0}, {0}, {0}, {0}, {0}, {0})
-               ON CONFLICT(video_id) DO UPDATE SET
+               (video_id, owner_id, language, style, position, animation, transcript, words, updated_at)
+               VALUES ({0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0})
+               ON CONFLICT(owner_id, video_id) DO UPDATE SET
                    language = excluded.language,
                    style = excluded.style,
                    position = excluded.position,
@@ -295,6 +496,7 @@ def save_subtitle_track(video_id: str, track: dict):
                    updated_at = excluded.updated_at""".format(ph),
             (
                 video_id,
+                owner,
                 track.get("language", "en"),
                 track.get("style", "default"),
                 track.get("position", "bottom"),
@@ -307,11 +509,14 @@ def save_subtitle_track(video_id: str, track: dict):
         conn.commit()
 
 
-def get_subtitle_track(video_id: str) -> Optional[dict]:
+def get_subtitle_track(video_id: str, *, owner_id: Optional[str] = None) -> Optional[dict]:
     ph = _ph()
+    owner_clause, owner_values = _owner_filter_sql(owner_id=owner_id)
+    owner_clause = owner_clause.format(ph=ph)
     with _conn() as conn:
         row = conn.execute(
-            f"SELECT * FROM subtitle_tracks WHERE video_id = {ph}", (video_id,)
+            f"SELECT * FROM subtitle_tracks WHERE video_id = {ph} AND {owner_clause}",
+            (video_id, *owner_values),
         ).fetchone()
     if not row:
         return None
@@ -320,28 +525,32 @@ def get_subtitle_track(video_id: str) -> Optional[dict]:
     return d
 
 
-def save_timeline_project(video_id: str, project: dict):
+def save_timeline_project(video_id: str, project: dict, *, owner_id: Optional[str] = None):
     now = datetime.now(timezone.utc).isoformat()
+    owner = owner_id or current_owner_id()
     data = dict(project)
     data["updated_at"] = now
     ph = _ph()
     with _conn() as conn:
         conn.execute(
-            """INSERT INTO timeline_projects (video_id, project, updated_at)
-               VALUES ({0}, {0}, {0})
-               ON CONFLICT(video_id) DO UPDATE SET
+            """INSERT INTO timeline_projects (video_id, owner_id, project, updated_at)
+               VALUES ({0}, {0}, {0}, {0})
+               ON CONFLICT(owner_id, video_id) DO UPDATE SET
                    project = excluded.project,
                    updated_at = excluded.updated_at""".format(ph),
-            (video_id, json.dumps(data), now),
+            (video_id, owner, json.dumps(data), now),
         )
         conn.commit()
 
 
-def get_timeline_project(video_id: str) -> Optional[dict]:
+def get_timeline_project(video_id: str, *, owner_id: Optional[str] = None) -> Optional[dict]:
     ph = _ph()
+    owner_clause, owner_values = _owner_filter_sql(owner_id=owner_id)
+    owner_clause = owner_clause.format(ph=ph)
     with _conn() as conn:
         row = conn.execute(
-            f"SELECT project FROM timeline_projects WHERE video_id = {ph}", (video_id,)
+            f"SELECT project FROM timeline_projects WHERE video_id = {ph} AND {owner_clause}",
+            (video_id, *owner_values),
         ).fetchone()
     if not row:
         return None

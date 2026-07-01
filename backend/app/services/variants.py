@@ -11,6 +11,7 @@ from app.models.schemas import VariantSpec
 from app.services import downloader, state_store, variant_intelligence
 from app.services.processor import TARGET_H, TARGET_W, probe_video, validate_output
 from app.services.safety import validate_public_video_url
+from app.tenant import can_see_legacy, current_owner_id, reset_current_owner, set_current_owner
 from app.utils.helpers import find_ffmpeg, run_command
 
 OUTPUT_DIR = os.path.abspath("output")
@@ -24,8 +25,21 @@ def _safe_upload_id(upload_id: str) -> str:
     return upload_id
 
 
-def _source_path(upload_id: str) -> str | None:
+def _source_owner_allowed(upload_id: str, owner_id: str) -> bool:
+    job = _source_jobs.get(upload_id)
+    if not job:
+        return can_see_legacy(owner_id)
+    job_owner = job.get("owner_id", "")
+    if can_see_legacy(owner_id):
+        return job_owner in {"", owner_id, "local-dev"}
+    return job_owner == owner_id
+
+
+def _source_path(upload_id: str, *, owner_id: str | None = None) -> str | None:
     upload_id = _safe_upload_id(upload_id)
+    owner = owner_id or current_owner_id()
+    if not _source_owner_allowed(upload_id, owner):
+        return None
     root = Path(get_settings().uploads_dir)
     for path in root.glob(f"{upload_id}.*"):
         if path.is_file():
@@ -43,6 +57,25 @@ def upload_path(upload_id: str, original_name: str) -> str:
     return os.path.join(get_settings().uploads_dir, f"{_safe_upload_id(upload_id)}{suffix}")
 
 
+def register_source(upload_id: str, filename: str, *, url: str = "", path: str = "") -> dict:
+    upload_id = _safe_upload_id(upload_id)
+    now = datetime.now(timezone.utc).isoformat()
+    _source_jobs[upload_id] = {
+        "upload_id": upload_id,
+        "owner_id": current_owner_id(),
+        "url": url,
+        "filename": filename,
+        "status": "completed",
+        "progress": 1.0,
+        "message": "Source ready",
+        "error": "",
+        "path": path,
+        "created_at": now,
+        "updated_at": now,
+    }
+    return _source_jobs[upload_id].copy()
+
+
 async def create_source_from_url(url: str) -> dict:
     clean_url = validate_public_video_url(url)
 
@@ -50,12 +83,7 @@ async def create_source_from_url(url: str) -> dict:
     path = await downloader.download_video(clean_url, upload_id, force=True, timeout=1200)
     if not path:
         raise RuntimeError("Video download failed. Use a public video URL supported by yt-dlp.")
-    return {
-        "upload_id": upload_id,
-        "filename": os.path.basename(path),
-        "url": clean_url,
-        "path": path,
-    }
+    return register_source(upload_id, os.path.basename(path), url=clean_url, path=path)
 
 
 def start_source_download(url: str) -> dict:
@@ -65,6 +93,7 @@ def start_source_download(url: str) -> dict:
     now = datetime.now(timezone.utc).isoformat()
     _source_jobs[upload_id] = {
         "upload_id": upload_id,
+        "owner_id": current_owner_id(),
         "url": clean_url,
         "filename": "",
         "status": "queued",
@@ -79,10 +108,13 @@ def start_source_download(url: str) -> dict:
 
 def get_source_status(upload_id: str) -> dict:
     upload_id = _safe_upload_id(upload_id)
+    owner_id = current_owner_id()
+    if not _source_owner_allowed(upload_id, owner_id):
+        raise FileNotFoundError("Source download not found")
     job = _source_jobs.get(upload_id)
     if job:
         return job.copy()
-    source = _source_path(upload_id)
+    source = _source_path(upload_id, owner_id=owner_id)
     if source:
         return {
             "upload_id": upload_id,
@@ -98,12 +130,14 @@ def get_source_status(upload_id: str) -> dict:
     raise FileNotFoundError("Source download not found")
 
 
-async def download_source_job(upload_id: str, url: str) -> None:
+async def download_source_job(upload_id: str, url: str, owner_id: str = "local-dev") -> None:
     upload_id = _safe_upload_id(upload_id)
+    token = set_current_owner(owner_id)
 
     def update(status: str, progress: float, message: str = "", error: str = "", filename: str = ""):
-        current = _source_jobs.get(upload_id, {"upload_id": upload_id, "url": url})
+        current = _source_jobs.get(upload_id, {"upload_id": upload_id, "owner_id": owner_id, "url": url})
         current.update({
+            "owner_id": owner_id,
             "status": status,
             "progress": round(max(0.0, min(1.0, progress)), 4),
             "message": message or current.get("message", ""),
@@ -132,6 +166,8 @@ async def download_source_job(upload_id: str, url: str) -> None:
         update("completed", 1.0, "Source ready", filename=os.path.basename(path))
     except Exception as e:
         update("failed", 0.0, "Download failed", str(e))
+    finally:
+        reset_current_owner(token)
 
 
 async def plan_variants(source_path: str, upload_id: str, *, count: int = 10) -> tuple[list[VariantSpec], bool, dict]:

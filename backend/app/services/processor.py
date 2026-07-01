@@ -26,6 +26,7 @@ from app.utils.helpers import find_ffmpeg, run_command, run_command_with_progres
 from app.models.schemas import AntiDetectionConfig, AntiDetectionLevel, TextRemovalMode
 from app.services import subtitles as subtitles_service
 from app.services.safety import safe_asset_filename, safe_id
+from app.tenant import storage_video_id
 
 logger = logging.getLogger(__name__)
 
@@ -557,7 +558,8 @@ async def process_video(
 
     speed = _speed_factor(rng) if config.speed_variation else None
 
-    output_path = os.path.join(OUTPUT_DIR, f"{video_id}_processed.mp4")
+    file_id = storage_video_id(video_id)
+    output_path = os.path.join(OUTPUT_DIR, f"{file_id}_processed.mp4")
 
     cmd = await asyncio.to_thread(
         _build_command, ffmpeg, input_path, output_path, config, probe, rng, speed, srt_path, settings

@@ -9,6 +9,7 @@ from pathlib import Path
 from app.services import state_store
 from app.services.processor import probe_video
 from app.services.subtitle_editor import source_video_path
+from app.tenant import storage_video_id
 
 OUTPUT_DIR = os.path.abspath("output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -38,7 +39,7 @@ def _hex_to_bgr(color: str, fallback: str) -> tuple[int, int, int]:
 
 
 def _source_for_cover(video_id: str) -> str | None:
-    timeline = os.path.join(OUTPUT_DIR, f"{video_id}_timeline.mp4")
+    timeline = os.path.join(OUTPUT_DIR, f"{storage_video_id(video_id)}_timeline.mp4")
     if os.path.isfile(timeline):
         return timeline
     return source_video_path(video_id)
@@ -202,7 +203,7 @@ def _generate_cover_sync(video_path: str, video_id: str, duration: float, headli
     _draw_text_block(cv2, cover, headline, brand_name, primary, accent)
     cv2.rectangle(cover, (0, 0), (out_w - 1, out_h - 1), primary, 14)
 
-    output_path = os.path.join(OUTPUT_DIR, f"{video_id}_{platform}_cover.jpg")
+    output_path = os.path.join(OUTPUT_DIR, f"{storage_video_id(video_id)}_{platform}_cover.jpg")
     if not cv2.imwrite(output_path, cover, [int(cv2.IMWRITE_JPEG_QUALITY), 92]):
         raise RuntimeError("Failed to write cover image")
     return {

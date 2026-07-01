@@ -7,6 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, Up
 from app.config import get_settings
 from app.models.schemas import VariantGenerationResponse, VariantUploadResponse, VariantUrlRequest
 from app.services import entitlements, variants
+from app.tenant import owner_from_user
 
 router = APIRouter()
 
@@ -46,6 +47,7 @@ async def upload_source_video(request: Request, file: UploadFile = File(...)):
         raise
     finally:
         await file.close()
+    variants.register_source(upload_id, os.path.basename(path), path=path)
     return {"upload_id": upload_id, "filename": os.path.basename(path)}
 
 
@@ -80,6 +82,7 @@ async def start_source_download(req: VariantUrlRequest, background_tasks: Backgr
             variants.download_source_job,
             source["upload_id"],
             source["url"],
+            owner_from_user(getattr(request.state, "user", None)),
         )
         return source
     except ValueError as e:
@@ -87,7 +90,7 @@ async def start_source_download(req: VariantUrlRequest, background_tasks: Backgr
 
 
 @router.get("/{upload_id}/source-status")
-async def get_source_download_status(upload_id: str):
+async def get_source_download_status(upload_id: str, request: Request):
     try:
         return variants.get_source_status(upload_id)
     except FileNotFoundError as e:

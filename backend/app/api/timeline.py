@@ -16,6 +16,7 @@ from app.models.schemas import (
     TimelineSmartCropResponse,
 )
 from app.services import clip_scoring, cover_generator, entitlements, render_queue, timeline_editor
+from app.tenant import owner_from_user
 
 router = APIRouter()
 
@@ -77,29 +78,29 @@ async def enqueue_timeline_render(video_id: str, req: TimelineQueueRequest, requ
 
 
 @router.get("/queue/jobs")
-async def list_timeline_queue():
-    return {"jobs": await render_queue.list_jobs()}
+async def list_timeline_queue(request: Request):
+    return {"jobs": await render_queue.list_jobs(owner_from_user(getattr(request.state, "user", None)))}
 
 
 @router.post("/queue/{job_id}/pause")
-async def pause_timeline_queue_job(job_id: str):
-    job = await render_queue.pause_job(job_id)
+async def pause_timeline_queue_job(job_id: str, request: Request):
+    job = await render_queue.pause_job(job_id, owner_from_user(getattr(request.state, "user", None)))
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
 
 @router.post("/queue/{job_id}/resume")
-async def resume_timeline_queue_job(job_id: str):
-    job = await render_queue.resume_job(job_id)
+async def resume_timeline_queue_job(job_id: str, request: Request):
+    job = await render_queue.resume_job(job_id, owner_from_user(getattr(request.state, "user", None)))
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
 
 @router.post("/queue/{job_id}/retry")
-async def retry_timeline_queue_job(job_id: str):
-    job = await render_queue.retry_job(job_id)
+async def retry_timeline_queue_job(job_id: str, request: Request):
+    job = await render_queue.retry_job(job_id, owner_from_user(getattr(request.state, "user", None)))
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job

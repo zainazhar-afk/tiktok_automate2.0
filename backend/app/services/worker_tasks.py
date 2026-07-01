@@ -7,6 +7,7 @@ import logging
 
 from app.models.schemas import AntiDetectionConfig, JobStatus
 from app.services import downloader, processor, metadata, job_queue, state_store
+from app.tenant import reset_current_owner, set_current_owner
 
 logger = logging.getLogger(__name__)
 
@@ -21,18 +22,19 @@ def run_pipeline_job(
     url: str,
     config_dict: dict,
     video_meta: dict,
+    owner_id: str = "local-dev",
 ):
     """Full pipeline executed by RQ worker."""
+    token = set_current_owner(owner_id)
     title = video_meta.get("title", "")
     channel = video_meta.get("channel", "")
     description = video_meta.get("description", "")
     tags = video_meta.get("tags", [])
 
-    state_store.upsert_video(
-        video_id, title=title, channel=channel, status="queued"
-    )
-
     try:
+        state_store.upsert_video(
+            video_id, title=title, channel=channel, status="queued"
+        )
         job_queue.update_job(job_id, status=JobStatus.DOWNLOADING, progress=0.2)
         state_store.upsert_video(video_id, status="downloading")
 
@@ -95,3 +97,5 @@ def run_pipeline_job(
         state_store.upsert_video(video_id, status="failed", error=str(e))
         job_queue.update_job(job_id, status=JobStatus.FAILED, error=str(e))
         raise
+    finally:
+        reset_current_owner(token)

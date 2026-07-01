@@ -12,6 +12,7 @@ import httpx
 
 from app.models.schemas import SubtitleTrack
 from app.services import state_store, subtitles
+from app.tenant import storage_video_id
 from app.utils.helpers import find_ffmpeg, run_command
 
 OUTPUT_DIR = os.path.abspath("output")
@@ -248,7 +249,8 @@ def get_or_create_track(video_id: str) -> dict:
     if saved:
         return saved
 
-    srt_path = os.path.join(OUTPUT_DIR, f"{video_id}.srt")
+    file_id = storage_video_id(video_id)
+    srt_path = os.path.join(OUTPUT_DIR, f"{file_id}.srt")
     if os.path.exists(srt_path):
         with open(srt_path, "r", encoding="utf-8") as f:
             words = cues_to_words(parse_subtitle_text(f.read(), "srt"))
@@ -280,7 +282,7 @@ async def transcribe_track(
         raise FileNotFoundError("Processed video not found")
 
     requested_language = _normalize_language(language)
-    srt_path = os.path.join(OUTPUT_DIR, f"{video_id}.srt")
+    srt_path = os.path.join(OUTPUT_DIR, f"{storage_video_id(video_id)}.srt")
     if force or not os.path.exists(srt_path):
         generated = await subtitles.generate_subtitles(
             source,
@@ -403,8 +405,9 @@ async def translate_track(video_id: str, source_language: str, target_language: 
 
 def write_sidecars(track: dict) -> dict:
     video_id = _safe_video_id(track["video_id"])
-    srt_path = os.path.join(OUTPUT_DIR, f"{video_id}_edited.srt")
-    vtt_path = os.path.join(OUTPUT_DIR, f"{video_id}_edited.vtt")
+    file_id = storage_video_id(video_id)
+    srt_path = os.path.join(OUTPUT_DIR, f"{file_id}_edited.srt")
+    vtt_path = os.path.join(OUTPUT_DIR, f"{file_id}_edited.vtt")
     with open(srt_path, "w", encoding="utf-8") as f:
         f.write(export_srt(track))
     with open(vtt_path, "w", encoding="utf-8") as f:
@@ -441,7 +444,7 @@ def _style_line(track: dict) -> str:
 
 def write_ass(track: dict) -> str:
     video_id = _safe_video_id(track["video_id"])
-    ass_path = os.path.join(OUTPUT_DIR, f"{video_id}_edited.ass")
+    ass_path = os.path.join(OUTPUT_DIR, f"{storage_video_id(video_id)}_edited.ass")
     animation = track.get("animation", "none")
     prefix = ""
     if animation == "pop":
@@ -492,23 +495,26 @@ def _escape_filter_path(path: str) -> str:
 
 def source_video_path(video_id: str) -> Optional[str]:
     video_id = _safe_video_id(video_id)
-    for suffix in ["_processed.mp4", "_edited.mp4", ".mp4"]:
-        path = os.path.join(OUTPUT_DIR, f"{video_id}{suffix}")
-        if os.path.isfile(path):
-            return path
     video = state_store.get_video(video_id) or {}
-    output = video.get("output_path")
-    if output:
-        output_path = Path(output)
+    for key in ["output_path", "download_path"]:
+        stored = video.get(key)
+        if not stored:
+            continue
+        output_path = Path(stored)
         if not output_path.is_absolute():
-            output_path = Path(OUTPUT_DIR) / output_path.name
+            output_path = Path(OUTPUT_DIR) / output_path.name if key == "output_path" else Path("temp/downloads") / output_path.name
         try:
             resolved = output_path.resolve()
-            output_root = Path(OUTPUT_DIR).resolve()
-            if resolved.parent == output_root and resolved.is_file():
+            roots = [Path(OUTPUT_DIR).resolve(), Path("temp/downloads").resolve()]
+            if resolved.parent in roots and resolved.is_file():
                 return str(resolved)
         except OSError:
-            return None
+            continue
+    file_id = storage_video_id(video_id)
+    for suffix in ["_processed.mp4", "_edited.mp4", "_timeline.mp4", ".mp4"]:
+        path = os.path.join(OUTPUT_DIR, f"{file_id}{suffix}")
+        if os.path.isfile(path):
+            return path
     return None
 
 
@@ -523,7 +529,7 @@ async def render_video(video_id: str) -> dict:
 
     ass_path = write_ass(track)
     write_sidecars(track)
-    output_path = os.path.join(OUTPUT_DIR, f"{video_id}_edited.mp4")
+    output_path = os.path.join(OUTPUT_DIR, f"{storage_video_id(video_id)}_edited.mp4")
     vf = f"ass='{_escape_filter_path(ass_path)}'"
     cmd = [
         ffmpeg, "-y", "-i", source,

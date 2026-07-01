@@ -1,10 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from app.api import account, youtube, videos, process, events, state, editor, timeline, variants
 from app.auth import authenticate_request
+from app.tenant import owner_from_user, reset_current_owner, set_current_owner
 from app.services import state_store
 from app.services.state_store import init_db
 from app.utils.helpers import find_ffmpeg, find_ytdlp, find_aria2c
@@ -36,13 +36,14 @@ async def auth_middleware(request, call_next):
         status_code = getattr(exc, "status_code", 500)
         detail = getattr(exc, "detail", "Authentication failed")
         return JSONResponse({"detail": detail}, status_code=status_code)
-    return await call_next(request)
+    token = set_current_owner(owner_from_user(request.state.user))
+    try:
+        return await call_next(request)
+    finally:
+        reset_current_owner(token)
 
-os.makedirs("output", exist_ok=True)
 os.makedirs("temp", exist_ok=True)
 init_db()
-
-app.mount("/output", StaticFiles(directory="output"), name="output")
 
 app.include_router(youtube.router, prefix="/api/youtube", tags=["YouTube"])
 app.include_router(videos.router, prefix="/api/videos", tags=["Videos"])

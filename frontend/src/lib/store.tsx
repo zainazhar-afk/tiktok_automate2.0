@@ -8,6 +8,7 @@ import React, {
   useEffect,
   useRef,
 } from "react";
+import { useAuth } from "@/lib/auth";
 import {
   VideoInfo,
   AntiDetectionConfig,
@@ -73,6 +74,7 @@ type Action =
   | { type: "SET_JOBS"; payload: JobInfo[] }
   | { type: "UPDATE_JOB"; payload: JobInfo }
   | { type: "HYDRATE"; payload: Partial<AppState> }
+  | { type: "RESET_ACCOUNT_STATE" }
   | { type: "CLEAR_ERROR" };
 
 function reducer(state: AppState, action: Action): AppState {
@@ -164,6 +166,17 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "HYDRATE":
       return { ...state, ...action.payload };
+    case "RESET_ACCOUNT_STATE":
+      return {
+        ...state,
+        selectedVideoIds: new Set(),
+        downloadedPaths: new Map(),
+        downloadingIds: new Set(),
+        processedPaths: new Map(),
+        processingIds: new Set(),
+        jobs: [],
+        error: null,
+      };
     case "CLEAR_ERROR":
       return { ...state, error: null };
     default:
@@ -171,10 +184,10 @@ function reducer(state: AppState, action: Action): AppState {
   }
 }
 
-function persistState(state: AppState) {
+function persistState(storageKey: string, state: AppState) {
   try {
     localStorage.setItem(
-      STORAGE_KEY,
+      storageKey,
       JSON.stringify({
         downloadedPaths: Array.from(state.downloadedPaths.entries()),
         processedPaths: Array.from(state.processedPaths.entries()),
@@ -210,8 +223,10 @@ interface AppContextValue {
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
+  const auth = useAuth();
   const [state, dispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
+  const storageKey = `${STORAGE_KEY}:${auth.user?.id || "local-dev"}`;
 
   useEffect(() => {
     stateRef.current = state;
@@ -223,8 +238,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   });
 
   useEffect(() => {
+    dispatch({ type: "RESET_ACCOUNT_STATE" });
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(storageKey);
       if (raw) {
         const saved = JSON.parse(raw);
         dispatch({
@@ -256,11 +272,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         })
         .catch(() => {});
     });
-  }, []);
+  }, [storageKey]);
 
   useEffect(() => {
-    persistState(state);
-  }, [state]);
+    persistState(storageKey, state);
+  }, [state, storageKey]);
 
   useEffect(() => {
     let unsub: (() => void) | undefined;
@@ -295,7 +311,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
     });
     return () => unsub?.();
-  }, []);
+  }, [storageKey]);
 
   const setFilters = useCallback((filters: Partial<DiscoveryFilters>) => {
     dispatch({ type: "SET_FILTERS", payload: filters });

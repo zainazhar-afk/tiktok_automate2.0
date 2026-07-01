@@ -158,6 +158,7 @@ export type JobStatus = "queued" | "downloading" | "processing" | "completed" | 
 
 export interface JobInfo {
   job_id: string;
+  owner_id?: string;
   video_id: string;
   status: JobStatus;
   progress: number;
@@ -172,6 +173,9 @@ export interface JobInfo {
 
 export interface ProcessedVideoFile {
   id: string;
+  owner_id?: string;
+  visibility_status?: "available" | "unavailable";
+  unavailable_reason?: string;
   filename: string;
   path: string;
   size_mb: number;
@@ -283,6 +287,7 @@ export interface TimelineSmartCropResponse {
 
 export interface TimelineQueueJob {
   job_id: string;
+  owner_id?: string;
   video_id: string;
   title: string;
   status: "queued" | "running" | "paused" | "completed" | "failed";

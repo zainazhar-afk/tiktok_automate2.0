@@ -8,6 +8,7 @@ import uuid
 from typing import Optional
 
 from app.models.schemas import JobInfo, JobStatus
+from app.tenant import can_see_legacy, current_owner_id
 
 logger = logging.getLogger(__name__)
 
@@ -107,10 +108,17 @@ def publish_event(event_type: str, data: dict):
         logger.debug(f"Event (no redis): {event_type}")
 
 
-def create_job(video_id: str, title: str = "", channel: str = "") -> JobInfo:
+def _visible_to_owner(job: JobInfo, owner_id: str) -> bool:
+    if can_see_legacy(owner_id):
+        return job.owner_id in {"", owner_id, "local-dev"}
+    return job.owner_id == owner_id
+
+
+def create_job(video_id: str, title: str = "", channel: str = "", owner_id: Optional[str] = None) -> JobInfo:
     job_id = str(uuid.uuid4())[:8]
     job = JobInfo(
         job_id=job_id,
+        owner_id=owner_id or current_owner_id(),
         video_id=video_id,
         status=JobStatus.QUEUED,
         title=title,
@@ -120,14 +128,16 @@ def create_job(video_id: str, title: str = "", channel: str = "") -> JobInfo:
     return job
 
 
-def get_job(job_id: str) -> Optional[JobInfo]:
+def get_job(job_id: str, owner_id: Optional[str] = None) -> Optional[JobInfo]:
     r = _get_redis()
     if r:
         raw = r.get(_job_key(job_id))
         if raw:
-            return JobInfo.model_validate_json(raw)
+            job = JobInfo.model_validate_json(raw)
+            return job if owner_id is None or _visible_to_owner(job, owner_id) else None
         return None
-    return _memory_jobs.get(job_id)
+    job = _memory_jobs.get(job_id)
+    return job if job and (owner_id is None or _visible_to_owner(job, owner_id)) else None
 
 
 def update_job(job_id: str, **kwargs):
@@ -140,7 +150,8 @@ def update_job(job_id: str, **kwargs):
     _save_job(job)
 
 
-def list_jobs() -> list[JobInfo]:
+def list_jobs(owner_id: Optional[str] = None) -> list[JobInfo]:
+    owner = owner_id or current_owner_id()
     r = _get_redis()
     if r:
         ids = r.smembers("jobs:all")
@@ -148,9 +159,11 @@ def list_jobs() -> list[JobInfo]:
         for jid in ids:
             raw = r.get(_job_key(jid))
             if raw:
-                jobs.append(JobInfo.model_validate_json(raw))
+                job = JobInfo.model_validate_json(raw)
+                if _visible_to_owner(job, owner):
+                    jobs.append(job)
         return jobs
-    return list(_memory_jobs.values())
+    return [job for job in _memory_jobs.values() if _visible_to_owner(job, owner)]
 
 
 def bulk_create_jobs(video_ids: list[str], video_meta: Optional[dict] = None) -> list[JobInfo]:
@@ -160,6 +173,7 @@ def bulk_create_jobs(video_ids: list[str], video_meta: Optional[dict] = None) ->
             vid,
             title=meta.get(vid, {}).get("title", ""),
             channel=meta.get(vid, {}).get("channel", ""),
+            owner_id=current_owner_id(),
         )
         for vid in video_ids
     ]
@@ -188,6 +202,7 @@ def enqueue_pipeline(
                 url,
                 config_dict,
                 meta,
+                job.owner_id,
                 job_timeout=900,
             )
             update_job(job.job_id, status=JobStatus.QUEUED)

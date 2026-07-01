@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from app.models.schemas import TimelineProject, TimelineQueueJob
 from app.services import timeline_editor
 from app.services.subtitle_editor import source_video_path
+from app.tenant import can_see_legacy, current_owner_id, reset_current_owner, set_current_owner
 
 _jobs: dict[str, dict] = {}
 _worker_task: asyncio.Task | None = None
@@ -22,6 +23,7 @@ def _now() -> str:
 def _job_public(job: dict) -> dict:
     return TimelineQueueJob(
         job_id=job["job_id"],
+        owner_id=job.get("owner_id", ""),
         video_id=job["video_id"],
         title=job.get("title", ""),
         status=job.get("status", "queued"),
@@ -36,14 +38,23 @@ def _job_public(job: dict) -> dict:
     ).model_dump()
 
 
+def _visible_to_owner(job: dict, owner_id: str) -> bool:
+    job_owner = job.get("owner_id", "")
+    if can_see_legacy(owner_id):
+        return job_owner in {"", owner_id, "local-dev"}
+    return job_owner == owner_id
+
+
 async def enqueue(project: TimelineProject) -> dict:
     global _worker_task
     source = source_video_path(project.video_id)
     job_id = uuid.uuid4().hex[:10]
     now = _now()
+    owner_id = current_owner_id()
     async with _lock:
         _jobs[job_id] = {
             "job_id": job_id,
+            "owner_id": owner_id,
             "video_id": project.video_id,
             "title": f"{project.video_id} timeline",
             "status": "queued",
@@ -62,22 +73,25 @@ async def enqueue(project: TimelineProject) -> dict:
         return _job_public(_jobs[job_id])
 
 
-async def list_jobs() -> list[dict]:
+async def list_jobs(owner_id: str | None = None) -> list[dict]:
+    owner = owner_id or current_owner_id()
     async with _lock:
-        jobs = [_job_public(job) for job in _jobs.values()]
+        jobs = [_job_public(job) for job in _jobs.values() if _visible_to_owner(job, owner)]
     return sorted(jobs, key=lambda job: job["created_at"], reverse=True)
 
 
-async def get_job(job_id: str) -> dict | None:
+async def get_job(job_id: str, owner_id: str | None = None) -> dict | None:
+    owner = owner_id or current_owner_id()
     async with _lock:
         job = _jobs.get(job_id)
-        return _job_public(job) if job else None
+        return _job_public(job) if job and _visible_to_owner(job, owner) else None
 
 
-async def pause_job(job_id: str) -> dict | None:
+async def pause_job(job_id: str, owner_id: str | None = None) -> dict | None:
+    owner = owner_id or current_owner_id()
     async with _lock:
         job = _jobs.get(job_id)
-        if not job:
+        if not job or not _visible_to_owner(job, owner):
             return None
         if job["status"] == "queued":
             job["status"] = "paused"
@@ -89,11 +103,12 @@ async def pause_job(job_id: str) -> dict | None:
         return _job_public(job)
 
 
-async def resume_job(job_id: str) -> dict | None:
+async def resume_job(job_id: str, owner_id: str | None = None) -> dict | None:
     global _worker_task
+    owner = owner_id or current_owner_id()
     async with _lock:
         job = _jobs.get(job_id)
-        if not job:
+        if not job or not _visible_to_owner(job, owner):
             return None
         if job["status"] == "paused":
             job["status"] = "queued"
@@ -105,11 +120,12 @@ async def resume_job(job_id: str) -> dict | None:
         return _job_public(job)
 
 
-async def retry_job(job_id: str) -> dict | None:
+async def retry_job(job_id: str, owner_id: str | None = None) -> dict | None:
     global _worker_task
+    owner = owner_id or current_owner_id()
     async with _lock:
         job = _jobs.get(job_id)
-        if not job:
+        if not job or not _visible_to_owner(job, owner):
             return None
         if job["status"] in {"failed", "completed"}:
             job["status"] = "queued"
@@ -150,6 +166,7 @@ async def _worker_loop():
             return
         job_id = job["job_id"]
         await _update(job_id, status="running", progress=0.03, message="Starting render", error="")
+        token = set_current_owner(job.get("owner_id") or "local-dev")
         try:
             project = TimelineProject(**job["project"])
 
@@ -171,3 +188,5 @@ async def _worker_loop():
             )
         except Exception as exc:
             await _update(job_id, status="failed", progress=1.0, message="Render failed", error=str(exc))
+        finally:
+            reset_current_owner(token)

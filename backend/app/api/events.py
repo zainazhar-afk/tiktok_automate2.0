@@ -3,16 +3,27 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from app.services.job_queue import EVENTS_CHANNEL, _get_redis, list_jobs
+from app.tenant import can_see_legacy, owner_from_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def _event_stream():
+def _event_visible(payload: dict, owner_id: str) -> bool:
+    data = payload.get("data") if isinstance(payload, dict) else {}
+    if not isinstance(data, dict):
+        return True
+    job_owner = data.get("owner_id")
+    if can_see_legacy(owner_id):
+        return job_owner in {None, "", owner_id, "local-dev"}
+    return job_owner == owner_id
+
+
+async def _event_stream(owner_id: str):
     """SSE stream — Redis pub/sub when available, else periodic job poll."""
     r = _get_redis()
     if r:
@@ -25,7 +36,12 @@ async def _event_stream():
                     data = message["data"]
                     if isinstance(data, bytes):
                         data = data.decode()
-                    yield f"data: {data}\n\n"
+                    try:
+                        payload = json.loads(data)
+                    except json.JSONDecodeError:
+                        payload = {}
+                    if _event_visible(payload, owner_id):
+                        yield f"data: {data}\n\n"
                 else:
                     yield ": keepalive\n\n"
                 await asyncio.sleep(0.5)
@@ -34,16 +50,17 @@ async def _event_stream():
             pubsub.close()
     else:
         while True:
-            jobs = [j.model_dump() for j in list_jobs()]
+            jobs = [j.model_dump() for j in list_jobs(owner_id=owner_id)]
             payload = json.dumps({"type": "jobs_snapshot", "data": {"jobs": jobs}})
             yield f"data: {payload}\n\n"
             await asyncio.sleep(2)
 
 
 @router.get("/stream")
-async def stream_events():
+async def stream_events(request: Request):
+    owner_id = owner_from_user(getattr(request.state, "user", None))
     return StreamingResponse(
-        _event_stream(),
+        _event_stream(owner_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

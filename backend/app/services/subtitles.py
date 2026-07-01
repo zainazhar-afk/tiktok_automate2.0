@@ -21,6 +21,7 @@ from typing import Optional
 import httpx
 
 from app.config import get_settings
+from app.tenant import storage_video_id
 from app.utils.helpers import find_ffmpeg, run_command
 
 logger = logging.getLogger(__name__)
@@ -189,7 +190,7 @@ async def _compressed_audio_path(input_path: str, video_id: str) -> str:
         return input_path
     temp_dir = os.path.abspath(os.path.join("temp", "transcribe"))
     os.makedirs(temp_dir, exist_ok=True)
-    out_path = os.path.join(temp_dir, f"{video_id}_speech.mp3")
+    out_path = os.path.join(temp_dir, f"{storage_video_id(video_id)}_speech.mp3")
     cmd = [
         ffmpeg, "-y",
         "-i", input_path,
@@ -423,7 +424,7 @@ async def generate_subtitles(
     if not os.path.exists(input_path):
         return None
 
-    srt_path = os.path.join(OUTPUT_DIR, f"{video_id}.srt")
+    srt_path = os.path.join(OUTPUT_DIR, f"{storage_video_id(video_id)}.srt")
     settings = get_settings()
     selected_provider = _normalize_provider(provider or settings.transcription_provider)
     explicit_language = language is not None

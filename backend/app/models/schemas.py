@@ -169,6 +169,7 @@ class JobStatus(str, Enum):
 
 class JobInfo(BaseModel):
     job_id: str
+    owner_id: str = ""
     video_id: str
     status: JobStatus
     progress: float = 0.0
@@ -326,6 +327,7 @@ class TimelineQueueRequest(BaseModel):
 
 class TimelineQueueJob(BaseModel):
     job_id: str
+    owner_id: str = ""
     video_id: str
     title: str = ""
     status: str = "queued"  # queued | running | paused | completed | failed

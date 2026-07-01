@@ -23,6 +23,7 @@ import random
 import re
 from typing import Optional
 
+from app.tenant import storage_video_id
 from app.utils.helpers import find_ffmpeg, run_command
 
 logger = logging.getLogger(__name__)
@@ -131,7 +132,7 @@ async def generate_thumbnail(
     if not ffmpeg or not os.path.exists(video_path):
         return None
 
-    output_path = os.path.join(OUTPUT_DIR, f"{video_id}_cover.jpg")
+    output_path = os.path.join(OUTPUT_DIR, f"{storage_video_id(video_id)}_cover.jpg")
     timestamp = max(1.0, duration * 0.25)
 
     vf = (

@@ -6,6 +6,7 @@ from app.models.schemas import (
     JobStatus, JobInfo,
 )
 from app.services import processor, downloader, entitlements, job_queue, metadata, state_store
+from app.tenant import owner_from_user
 
 router = APIRouter()
 
@@ -156,20 +157,21 @@ async def _run_pipeline_inprocess(req, jobs, urls, video_meta):
                 urls.get(vid, f"https://youtube.com/shorts/{vid}"),
                 req.config.model_dump(),
                 meta,
+                job.owner_id if job else "local-dev",
             )
 
     await asyncio.gather(*[process_one(vid) for vid in req.video_ids], return_exceptions=True)
 
 
 @router.get("/jobs")
-async def list_jobs():
-    jobs = job_queue.list_jobs()
+async def list_jobs(request: Request):
+    jobs = job_queue.list_jobs(owner_id=owner_from_user(getattr(request.state, "user", None)))
     return {"jobs": [j.model_dump() for j in jobs], "total": len(jobs)}
 
 
 @router.get("/jobs/{job_id}")
-async def get_job(job_id: str):
-    job = job_queue.get_job(job_id)
+async def get_job(job_id: str, request: Request):
+    job = job_queue.get_job(job_id, owner_id=owner_from_user(getattr(request.state, "user", None)))
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job.model_dump()

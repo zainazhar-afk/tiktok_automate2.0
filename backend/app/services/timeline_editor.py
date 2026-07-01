@@ -12,6 +12,7 @@ from app.models.schemas import TimelineClip, TimelineProject
 from app.services import google_ai, groq_ai, smart_crop_tracker, state_store, subtitle_editor
 from app.services.processor import TARGET_H, TARGET_W, probe_video, validate_output
 from app.services.subtitle_editor import source_video_path
+from app.tenant import storage_video_id
 from app.utils.helpers import find_ffmpeg, run_command
 
 OUTPUT_DIR = os.path.abspath("output")
@@ -123,6 +124,23 @@ def _safe_filename(filename: str | None) -> str | None:
 def _resolve_broll_source(filename: str | None) -> str | None:
     safe = _safe_filename(filename)
     if not safe:
+        return None
+    visible_filenames: set[str] = set()
+    for row in state_store.list_videos():
+        for key in ["output_path", "download_path", "thumbnail_path"]:
+            value = row.get(key)
+            if value:
+                visible_filenames.add(os.path.basename(value))
+        vid = str(row.get("video_id") or "")
+        if vid:
+            file_id = storage_video_id(vid)
+            visible_filenames.update({
+                f"{file_id}.mp4",
+                f"{file_id}_processed.mp4",
+                f"{file_id}_edited.mp4",
+                f"{file_id}_timeline.mp4",
+            })
+    if safe not in visible_filenames:
         return None
     for directory in [OUTPUT_DIR, os.path.abspath(os.path.join("temp", "downloads"))]:
         root = Path(directory).resolve()
@@ -762,7 +780,8 @@ async def render_project(project: TimelineProject, progress_callback=None) -> di
         raise ValueError("Timeline must contain at least one clip")
 
     render_id = uuid.uuid4().hex[:8]
-    work_dir = os.path.join(TEMP_DIR, f"{video_id}_{render_id}")
+    file_id = storage_video_id(video_id)
+    work_dir = os.path.join(TEMP_DIR, f"{file_id}_{render_id}")
     os.makedirs(work_dir, exist_ok=True)
     try:
         if progress_callback:
@@ -796,7 +815,7 @@ async def render_project(project: TimelineProject, progress_callback=None) -> di
 
         list_path = os.path.join(work_dir, "concat.txt")
         _write_concat_list(segment_paths, list_path)
-        output_path = os.path.join(OUTPUT_DIR, f"{video_id}_timeline.mp4")
+        output_path = os.path.join(OUTPUT_DIR, f"{file_id}_timeline.mp4")
         if progress_callback:
             progress_callback(0.9, "Combining rendered clips")
         cmd = [
