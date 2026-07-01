@@ -1,11 +1,16 @@
 "use client";
 
 import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import SubtitleEditor from "@/components/editor/SubtitleEditor";
 import TimelineCropEditor from "@/components/editor/TimelineCropEditor";
 
-export default function EditorPage() {
-  const [mode, setMode] = useState<"timeline" | "subtitles">("timeline");
+function EditorContent() {
+  const params = useSearchParams();
+  const requestedMode = params.get("mode");
+  const [mode, setMode] = useState<"timeline" | "subtitles">(
+    requestedMode === "subtitles" ? "subtitles" : "timeline"
+  );
 
   return (
     <div className="space-y-5">
@@ -31,9 +36,15 @@ export default function EditorPage() {
         <p className="text-xs text-gray-500">Choose extra edits or go straight to export.</p>
       </div>
 
-      <Suspense fallback={<div className="text-sm text-gray-400">Loading editor...</div>}>
-        {mode === "timeline" ? <TimelineCropEditor /> : <SubtitleEditor />}
-      </Suspense>
+      {mode === "timeline" ? <TimelineCropEditor /> : <SubtitleEditor />}
     </div>
+  );
+}
+
+export default function EditorPage() {
+  return (
+    <Suspense fallback={<div className="text-sm text-gray-400">Loading editor...</div>}>
+      <EditorContent />
+    </Suspense>
   );
 }

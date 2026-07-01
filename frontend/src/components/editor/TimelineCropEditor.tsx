@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import type { ProcessedVideoFile, TimelineClip, TimelineClipScore, TimelineHookSuggestion, TimelineProject, TimelineQueueJob } from "@/types";
+import type { AccountStatus, ProcessedVideoFile, TimelineClip, TimelineClipScore, TimelineHookSuggestion, TimelineProject, TimelineQueueJob } from "@/types";
 import { useAuth } from "@/lib/auth";
 import {
   applyTimelineSilenceCuts,
@@ -11,6 +11,7 @@ import {
   enqueueTimelineRender,
   generateTimelineCover,
   generateTimelineHooks,
+  getAccountStatus,
   getTimelineProject,
   listTimelineQueue,
   listVideos,
@@ -97,6 +98,18 @@ function statusClass(status: TimelineQueueJob["status"]) {
   return "border-gray-700 bg-gray-950 text-gray-300";
 }
 
+function usageLabel(account: AccountStatus | null, key: string) {
+  const item = account?.usage?.[key];
+  if (!item) return "Quota unavailable";
+  if (item.remaining === null || item.remaining === undefined) return `${item.used} used, unlimited`;
+  return `${item.remaining}/${item.limit} left`;
+}
+
+function shouldShowAccountCta(message: string | null) {
+  if (!message) return false;
+  return /subscription|billing|quota|limit|rights/i.test(message);
+}
+
 export default function TimelineCropEditor() {
   const params = useSearchParams();
   const { accessToken } = useAuth();
@@ -104,6 +117,8 @@ export default function TimelineCropEditor() {
   const [videos, setVideos] = useState<ProcessedVideoFile[]>([]);
   const [activeId, setActiveId] = useState(requestedVideo || "");
   const [project, setProject] = useState<TimelineProject | null>(null);
+  const [account, setAccount] = useState<AccountStatus | null>(null);
+  const [accountError, setAccountError] = useState<string | null>(null);
   const [selectedClipId, setSelectedClipId] = useState("");
   const [undoStack, setUndoStack] = useState<TimelineProject[]>([]);
   const [redoStack, setRedoStack] = useState<TimelineProject[]>([]);
@@ -122,11 +137,23 @@ export default function TimelineCropEditor() {
   const [scoreLoading, setScoreLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const [renderedFilename, setRenderedFilename] = useState<string | null>(null);
 
   const activeVideo = videos.find((video) => video.id === activeId) || null;
   const selectedClip = project?.clips.find((clip) => clip.id === selectedClipId) || project?.clips[0] || null;
   const brollVideos = videos.filter((video) => video.filename !== activeVideo?.filename);
   const previewUrl = activeVideo ? videoFileUrl(activeVideo.filename, accessToken) : "";
+  const activeUnavailable = activeVideo?.visibility_status === "unavailable";
+  const requestedVideoMissing = Boolean(
+    requestedVideo && !loading && videos.length > 0 && !videos.some((video) => video.id === requestedVideo)
+  );
+  const renderRemaining = account?.usage?.timeline_render?.remaining;
+  const renderBlocked =
+    Boolean(account?.billing_required && !account.subscription_active) ||
+    Boolean(account?.rights_required && !account.rights_accepted) ||
+    renderRemaining === 0 ||
+    activeUnavailable;
 
   const totalDuration = useMemo(() => {
     return project?.clips.reduce((sum, clip) => sum + Math.max(0, clip.source_end - clip.source_start), 0) || 0;
@@ -142,10 +169,19 @@ export default function TimelineCropEditor() {
     setError(null);
     try {
       const data = await listVideos("processed");
-      const nextVideos = data.videos || [];
+      const nextVideos: ProcessedVideoFile[] = data.videos || [];
       setVideos(nextVideos);
-      if (!activeId && nextVideos.length) {
-        setActiveId(requestedVideo || nextVideos[0].id);
+      if (nextVideos.length === 0) {
+        setActiveId("");
+        setProject(null);
+        return;
+      }
+      const requestedExists = Boolean(requestedVideo && nextVideos.some((video) => video.id === requestedVideo));
+      const activeExists = Boolean(activeId && nextVideos.some((video) => video.id === activeId));
+      if (requestedExists && activeId !== requestedVideo) {
+        setActiveId(requestedVideo || "");
+      } else if (!activeExists) {
+        setActiveId(nextVideos[0].id);
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -153,6 +189,16 @@ export default function TimelineCropEditor() {
       setLoading(false);
     }
   }, [activeId, requestedVideo]);
+
+  const loadAccount = useCallback(async () => {
+    setAccountError(null);
+    try {
+      setAccount(await getAccountStatus());
+    } catch (e: unknown) {
+      setAccount(null);
+      setAccountError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
 
   const loadProject = useCallback(async (videoId: string) => {
     if (!videoId) return;
@@ -191,8 +237,20 @@ export default function TimelineCropEditor() {
   }, [loadVideos]);
 
   useEffect(() => {
-    if (!activeId) return;
-    const timer = setTimeout(() => void loadProject(activeId), 0);
+    const timer = setTimeout(() => void loadAccount(), 0);
+    return () => clearTimeout(timer);
+  }, [loadAccount]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setPreviewFailed(false);
+      setRenderedFilename(null);
+      if (!activeId) {
+        setProject(null);
+        return;
+      }
+      void loadProject(activeId);
+    }, 0);
     return () => clearTimeout(timer);
   }, [activeId, loadProject]);
 
@@ -340,12 +398,14 @@ export default function TimelineCropEditor() {
   };
 
   const handleRender = async () => {
-    if (!project) return;
+    if (!project || renderBlocked) return;
     setRendering(true);
     setError(null);
     try {
       const rendered = await renderTimelineProject(project);
       await loadVideos();
+      void loadAccount();
+      setRenderedFilename(rendered.filename || null);
       setMessage(`Rendered ${rendered.filename}`);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -445,13 +505,14 @@ export default function TimelineCropEditor() {
   };
 
   const handleQueueRender = async () => {
-    if (!project) return;
+    if (!project || renderBlocked) return;
     setToolBusy("queue");
     setError(null);
     try {
       const job = await enqueueTimelineRender(project);
       setQueueJobs((prev) => [job, ...prev.filter((item) => item.job_id !== job.job_id)]);
       setMessage(`Queued ${job.title}`);
+      void loadAccount();
       void loadQueue(true);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -536,9 +597,52 @@ export default function TimelineCropEditor() {
         </div>
       </div>
 
-      {(error || message) && (
-        <div className={`rounded-lg border p-3 text-sm ${error ? "border-red-800 bg-red-950/40 text-red-200" : "border-green-800 bg-green-950/30 text-green-200"}`}>
-          {error || message}
+      {(error || message || accountError || renderedFilename) && (
+        <div className={`rounded-lg border p-3 text-sm ${error || accountError ? "border-red-800 bg-red-950/40 text-red-200" : "border-green-800 bg-green-950/30 text-green-200"}`}>
+          <div className="font-medium">{error || accountError || message}</div>
+          {renderedFilename && !error && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <a href={videoFileUrl(renderedFilename, accessToken)} download={renderedFilename} className="rounded bg-green-700 px-3 py-1.5 text-xs text-white hover:bg-green-600">
+                Download render
+              </a>
+              <Link href="/export" className="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-100 hover:bg-gray-700">
+                Review in Export
+              </Link>
+            </div>
+          )}
+          {(error || accountError) && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button onClick={() => void loadVideos()} className="rounded bg-red-700 px-3 py-1.5 text-xs text-white hover:bg-red-600">
+                Retry media
+              </button>
+              <button onClick={() => void loadAccount()} className="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-100 hover:bg-gray-700">
+                Retry account
+              </button>
+              {shouldShowAccountCta(error || accountError) && (
+                <Link href="/account" className="rounded bg-yellow-700 px-3 py-1.5 text-xs text-white hover:bg-yellow-600">
+                  Open Account
+                </Link>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {requestedVideoMissing && (
+        <div className="rounded-lg border border-yellow-800 bg-yellow-950/30 p-3 text-sm text-yellow-100">
+          <div className="font-medium">That editor link points to a video this account cannot load.</div>
+          <p className="mt-1 text-xs text-yellow-200/80">It may have been deleted, belongs to another account, or is still rendering.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button onClick={() => void loadVideos()} className="rounded bg-yellow-700 px-3 py-1.5 text-xs text-white hover:bg-yellow-600">
+              Refresh
+            </button>
+            <Link href="/export" className="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-100 hover:bg-gray-700">
+              Export
+            </Link>
+            <Link href="/variants" className="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-100 hover:bg-gray-700">
+              Generate variants
+            </Link>
+          </div>
         </div>
       )}
 
@@ -552,7 +656,20 @@ export default function TimelineCropEditor() {
           </div>
           <div className="max-h-[620px] space-y-2 overflow-y-auto">
             {loading && <p className="text-xs text-gray-500">Loading...</p>}
-            {!loading && videos.length === 0 && <p className="text-xs text-gray-500">No processed videos yet.</p>}
+            {!loading && videos.length === 0 && (
+              <div className="rounded border border-gray-800 bg-gray-950/70 p-3 text-xs text-gray-400">
+                <p className="font-medium text-gray-200">No processed videos yet</p>
+                <p className="mt-1 leading-5 text-gray-500">Process a video or generate URL variants before opening the timeline.</p>
+                <div className="mt-3 grid gap-2">
+                  <Link href="/bulk" className="rounded bg-cyan-700 px-3 py-2 text-center text-white hover:bg-cyan-600">
+                    Process videos
+                  </Link>
+                  <Link href="/variants" className="rounded bg-gray-800 px-3 py-2 text-center text-gray-200 hover:bg-gray-700">
+                    Generate variants
+                  </Link>
+                </div>
+              </div>
+            )}
             {videos.map((video) => (
               <button
                 key={video.filename}
@@ -578,9 +695,9 @@ export default function TimelineCropEditor() {
                 {selectedClip && <span>{formatRange(selectedClip)}</span>}
               </div>
               <div className="relative mx-auto aspect-[9/16] max-h-[560px] overflow-hidden rounded border border-gray-800 bg-black">
-                {previewUrl ? (
+                {previewUrl && !activeUnavailable && !previewFailed ? (
                   <>
-                    <video src={previewUrl} controls className="h-full w-full object-contain" preload="metadata" />
+                    <video src={previewUrl} controls className="h-full w-full object-contain" preload="metadata" onError={() => setPreviewFailed(true)} />
                     {selectedClip && (selectedClip.crop_mode === "manual" || selectedClip.keyframes.length > 0) && (
                       <div
                         className="pointer-events-none absolute border-2 border-cyan-300 bg-cyan-300/10"
@@ -593,6 +710,16 @@ export default function TimelineCropEditor() {
                       />
                     )}
                   </>
+                ) : activeVideo && (activeUnavailable || previewFailed) ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-3 px-5 text-center text-xs text-gray-400">
+                    <div>
+                      <div className="font-medium text-gray-200">Preview unavailable</div>
+                      <div className="mt-1 leading-5 text-gray-500">{activeVideo.unavailable_reason || "The media file could not be loaded."}</div>
+                    </div>
+                    <button onClick={() => void loadVideos()} className="rounded bg-gray-800 px-3 py-1.5 text-gray-200 hover:bg-gray-700">
+                      Refresh
+                    </button>
+                  </div>
                 ) : (
                   <div className="flex h-full items-center justify-center text-xs text-gray-500">Select a video</div>
                 )}
@@ -605,12 +732,12 @@ export default function TimelineCropEditor() {
                 <span>{totalDuration.toFixed(1)}s total</span>
               </div>
               <div className="relative mx-auto aspect-[9/16] max-h-[560px] overflow-hidden rounded border border-cyan-900 bg-black">
-                {previewUrl && selectedClip ? (
+                {previewUrl && selectedClip && !activeUnavailable && !previewFailed ? (
                   <>
                     {selectedClip.broll_mode === "split" || selectedClip.layout === "split" || selectedClip.crop_mode === "split" ? (
                       <div className="grid h-full grid-rows-2">
-                        <video src={previewUrl} className="h-full w-full object-cover" muted playsInline preload="metadata" />
-                        <video src={previewUrl} className="h-full w-full object-cover blur-sm brightness-75" muted playsInline preload="metadata" />
+                        <video src={previewUrl} className="h-full w-full object-cover" muted playsInline preload="metadata" onError={() => setPreviewFailed(true)} />
+                        <video src={previewUrl} className="h-full w-full object-cover blur-sm brightness-75" muted playsInline preload="metadata" onError={() => setPreviewFailed(true)} />
                       </div>
                     ) : (
                       <video
@@ -619,11 +746,12 @@ export default function TimelineCropEditor() {
                         muted
                         playsInline
                         preload="metadata"
+                        onError={() => setPreviewFailed(true)}
                       />
                     )}
                     {selectedClip.broll_mode === "pip" && (
                       <div className="absolute bottom-14 right-4 aspect-[9/16] w-24 overflow-hidden rounded border border-white/40 bg-gray-950 shadow-lg">
-                        <video src={previewUrl} className="h-full w-full object-cover opacity-80" muted playsInline preload="metadata" />
+                        <video src={previewUrl} className="h-full w-full object-cover opacity-80" muted playsInline preload="metadata" onError={() => setPreviewFailed(true)} />
                       </div>
                     )}
                     {(project?.hook_title || project?.hook_subtitle) && (
@@ -646,6 +774,16 @@ export default function TimelineCropEditor() {
                       </div>
                     )}
                   </>
+                ) : activeVideo && (activeUnavailable || previewFailed) ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-3 px-5 text-center text-xs text-gray-400">
+                    <div>
+                      <div className="font-medium text-gray-200">Rendered preview unavailable</div>
+                      <div className="mt-1 leading-5 text-gray-500">{activeVideo.unavailable_reason || "The source media could not be loaded."}</div>
+                    </div>
+                    <Link href="/export" className="rounded bg-gray-800 px-3 py-1.5 text-gray-200 hover:bg-gray-700">
+                      Check exports
+                    </Link>
+                  </div>
                 ) : (
                   <div className="flex h-full items-center justify-center text-xs text-gray-500">Preview</div>
                 )}
@@ -1169,9 +1307,23 @@ export default function TimelineCropEditor() {
               </button>
             </div>
             <div className="grid gap-3 text-xs">
+              <div className={`rounded border p-3 ${renderBlocked ? "border-yellow-800 bg-yellow-950/30 text-yellow-100" : "border-gray-800 bg-gray-950/70 text-gray-400"}`}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>Timeline render quota: {usageLabel(account, "timeline_render")}</span>
+                  {renderBlocked && (
+                    <Link href="/account" className="rounded bg-yellow-700 px-2 py-1 text-white hover:bg-yellow-600">
+                      Account
+                    </Link>
+                  )}
+                </div>
+                {activeUnavailable && <p className="mt-2 text-red-300">{activeVideo?.unavailable_reason || "This source media is unavailable."}</p>}
+                {account?.rights_required && !account.rights_accepted && <p className="mt-2 text-yellow-300">Confirm source-media rights before rendering.</p>}
+                {account?.billing_required && !account.subscription_active && <p className="mt-2 text-yellow-300">An active subscription is required before rendering.</p>}
+                {renderRemaining === 0 && <p className="mt-2 text-yellow-300">Monthly timeline render limit reached.</p>}
+              </div>
               <button
                 onClick={handleQueueRender}
-                disabled={!project || toolBusy === "queue"}
+                disabled={!project || toolBusy === "queue" || renderBlocked}
                 className="rounded bg-indigo-700 px-3 py-2 font-medium text-white hover:bg-indigo-600 disabled:opacity-40"
               >
                 {toolBusy === "queue" ? "Queueing..." : "Queue current timeline"}
@@ -1212,15 +1364,25 @@ export default function TimelineCropEditor() {
                               Retry
                             </button>
                           )}
+                          {job.status === "failed" && shouldShowAccountCta(job.error || job.message) && (
+                            <Link href="/account" className="rounded bg-yellow-700 px-2 py-1 text-white hover:bg-yellow-600">
+                              Account
+                            </Link>
+                          )}
                           {sourceUrl && (
                             <a href={sourceUrl} target="_blank" rel="noreferrer" className="rounded bg-gray-800 px-2 py-1 text-gray-200 hover:bg-gray-700">
                               Original
                             </a>
                           )}
                           {outputUrl && (
-                            <a href={outputUrl} target="_blank" rel="noreferrer" className="rounded bg-emerald-800 px-2 py-1 text-emerald-50 hover:bg-emerald-700">
+                            <a href={outputUrl} download={job.output_filename || "timeline.mp4"} className="rounded bg-emerald-800 px-2 py-1 text-emerald-50 hover:bg-emerald-700">
                               Output
                             </a>
+                          )}
+                          {job.status === "completed" && (
+                            <Link href="/export" className="rounded bg-blue-800 px-2 py-1 text-blue-50 hover:bg-blue-700">
+                              Export
+                            </Link>
                           )}
                         </div>
                       </div>
@@ -1242,7 +1404,7 @@ export default function TimelineCropEditor() {
               </button>
               <button
                 onClick={handleRender}
-                disabled={!project || rendering}
+                disabled={!project || rendering || renderBlocked}
                 className="rounded bg-green-600 px-4 py-3 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-40"
               >
                 {rendering ? "Rendering..." : "Render timeline"}

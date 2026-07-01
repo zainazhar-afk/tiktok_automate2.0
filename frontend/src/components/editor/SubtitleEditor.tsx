@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import type { ProcessedVideoFile, SubtitleTrack, SubtitleWord } from "@/types";
+import type { AccountStatus, ProcessedVideoFile, SubtitleTrack, SubtitleWord } from "@/types";
 import { useAuth } from "@/lib/auth";
 import {
   applySubtitleTranscript,
   exportSubtitleTrack,
+  getAccountStatus,
   getSubtitleTrack,
   importSubtitleTrack,
   listVideos,
@@ -49,6 +50,13 @@ const TRANSCRIPTION_PROVIDERS: { value: TranscriptionProvider; label: string }[]
   { value: "groq", label: "Groq Whisper" },
   { value: "whisper", label: "Local Whisper" },
 ];
+const TRANSCRIBE_STAGES = [
+  { after: 0, label: "Preparing audio", progress: 15 },
+  { after: 8, label: "Uploading to provider", progress: 35 },
+  { after: 20, label: "Transcribing speech", progress: 62 },
+  { after: 45, label: "Aligning timed words", progress: 82 },
+  { after: 75, label: "Saving captions", progress: 92 },
+];
 
 function formatTime(seconds: number) {
   const m = Math.floor(seconds / 60);
@@ -73,6 +81,18 @@ function downloadText(filename: string, text: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
+function usageLabel(account: AccountStatus | null, key: string) {
+  const item = account?.usage?.[key];
+  if (!item) return "Quota unavailable";
+  if (item.remaining === null || item.remaining === undefined) return `${item.used} used, unlimited`;
+  return `${item.remaining}/${item.limit} left`;
+}
+
+function shouldShowAccountCta(message: string | null) {
+  if (!message) return false;
+  return /subscription|billing|quota|limit|rights/i.test(message);
+}
+
 export default function SubtitleEditor() {
   const params = useSearchParams();
   const { accessToken } = useAuth();
@@ -80,13 +100,19 @@ export default function SubtitleEditor() {
   const [videos, setVideos] = useState<ProcessedVideoFile[]>([]);
   const [activeId, setActiveId] = useState<string>(requestedVideo || "");
   const [track, setTrack] = useState<SubtitleTrack | null>(null);
+  const [account, setAccount] = useState<AccountStatus | null>(null);
+  const [accountError, setAccountError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [rendering, setRendering] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [transcribeStartedAt, setTranscribeStartedAt] = useState<number | null>(null);
+  const [transcribeElapsed, setTranscribeElapsed] = useState(0);
   const [applyingTranscript, setApplyingTranscript] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const [renderedFilename, setRenderedFilename] = useState<string | null>(null);
   const [keywordInput, setKeywordInput] = useState("");
   const [importFormat, setImportFormat] = useState<"srt" | "vtt">("srt");
   const [importText, setImportText] = useState("");
@@ -96,16 +122,37 @@ export default function SubtitleEditor() {
 
   const activeVideo = videos.find((video) => video.id === activeId) || null;
   const previewWords = useMemo(() => track?.words.slice(0, 8) || [], [track]);
+  const requestedVideoMissing = Boolean(
+    requestedVideo && !loading && videos.length > 0 && !videos.some((video) => video.id === requestedVideo)
+  );
+  const activeUnavailable = activeVideo?.visibility_status === "unavailable";
+  const quotaRemaining = account?.usage?.transcription?.remaining;
+  const transcriptionBlocked =
+    Boolean(account?.billing_required && !account.subscription_active) ||
+    quotaRemaining === 0 ||
+    activeUnavailable;
+  const transcribeStage = useMemo(() => {
+    return [...TRANSCRIBE_STAGES].reverse().find((stage) => transcribeElapsed >= stage.after) || TRANSCRIBE_STAGES[0];
+  }, [transcribeElapsed]);
 
   const loadVideos = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const data = await listVideos("processed");
-      const nextVideos = data.videos || [];
+      const nextVideos: ProcessedVideoFile[] = data.videos || [];
       setVideos(nextVideos);
-      if (!activeId && nextVideos.length) {
-        setActiveId(requestedVideo || nextVideos[0].id);
+      if (nextVideos.length === 0) {
+        setActiveId("");
+        setTrack(null);
+        return;
+      }
+      const requestedExists = Boolean(requestedVideo && nextVideos.some((video) => video.id === requestedVideo));
+      const activeExists = Boolean(activeId && nextVideos.some((video) => video.id === activeId));
+      if (requestedExists && activeId !== requestedVideo) {
+        setActiveId(requestedVideo || "");
+      } else if (!activeExists) {
+        setActiveId(nextVideos[0].id);
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -113,6 +160,16 @@ export default function SubtitleEditor() {
       setLoading(false);
     }
   }, [activeId, requestedVideo]);
+
+  const loadAccount = useCallback(async () => {
+    setAccountError(null);
+    try {
+      setAccount(await getAccountStatus());
+    } catch (e: unknown) {
+      setAccount(null);
+      setAccountError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
 
   const loadTrack = useCallback(async (videoId: string) => {
     if (!videoId) return;
@@ -137,10 +194,30 @@ export default function SubtitleEditor() {
   }, [loadVideos]);
 
   useEffect(() => {
-    if (!activeId) return;
-    const timer = setTimeout(() => void loadTrack(activeId), 0);
+    const timer = setTimeout(() => void loadAccount(), 0);
+    return () => clearTimeout(timer);
+  }, [loadAccount]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setPreviewFailed(false);
+      setRenderedFilename(null);
+      if (!activeId) {
+        setTrack(null);
+        return;
+      }
+      void loadTrack(activeId);
+    }, 0);
     return () => clearTimeout(timer);
   }, [activeId, loadTrack]);
+
+  useEffect(() => {
+    if (!transcribing || !transcribeStartedAt) return;
+    const tick = () => setTranscribeElapsed(Math.floor((Date.now() - transcribeStartedAt) / 1000));
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [transcribing, transcribeStartedAt]);
 
   const setTrackPatch = (patch: Partial<SubtitleTrack>) => {
     setTrack((current) => (current ? { ...current, ...patch } : current));
@@ -249,9 +326,11 @@ export default function SubtitleEditor() {
   };
 
   const handleTranscribe = async () => {
-    if (!activeId) return;
+    if (!activeId || transcriptionBlocked) return;
     setTranscribing(true);
+    setTranscribeStartedAt(Date.now());
     setError(null);
+    setMessage("Transcript generation started");
     try {
       const transcribed = await transcribeSubtitleTrack(activeId, {
         language: transcriptLanguage,
@@ -265,10 +344,13 @@ export default function SubtitleEditor() {
       const languageLabel = TRANSCRIPT_LANGUAGES.find((item) => item.value === transcriptLanguage)?.label || transcriptLanguage;
       const providerLabel = TRANSCRIPTION_PROVIDERS.find((item) => item.value === transcriptionProvider)?.label || transcriptionProvider;
       setMessage(`Generated ${languageLabel} transcript with ${transcribed.words.length} words via ${providerLabel}`);
+      void loadAccount();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setTranscribing(false);
+      setTranscribeStartedAt(null);
+      setTranscribeElapsed(0);
     }
   };
 
@@ -302,9 +384,10 @@ export default function SubtitleEditor() {
     try {
       const saved = await saveSubtitleTrack(track);
       setTrack(saved);
-      await renderSubtitleVideo(saved.video_id);
+      const rendered = await renderSubtitleVideo(saved.video_id);
       await loadVideos();
-      setMessage("Rendered edited-caption video");
+      setRenderedFilename(rendered.filename || null);
+      setMessage(`Rendered ${rendered.filename || "edited-caption video"}`);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -348,9 +431,56 @@ export default function SubtitleEditor() {
         </div>
       </div>
 
-      {(error || message) && (
-        <div className={`rounded-lg border p-3 text-sm ${error ? "border-red-800 bg-red-950/40 text-red-200" : "border-green-800 bg-green-950/30 text-green-200"}`}>
-          {error || message}
+      {(error || message || accountError || renderedFilename) && (
+        <div className={`rounded-lg border p-3 text-sm ${error || accountError ? "border-red-800 bg-red-950/40 text-red-200" : "border-green-800 bg-green-950/30 text-green-200"}`}>
+          <div className="font-medium">{error || accountError || message}</div>
+          {renderedFilename && !error && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <a
+                href={videoFileUrl(renderedFilename, accessToken)}
+                download={renderedFilename}
+                className="rounded bg-green-700 px-3 py-1.5 text-xs text-white hover:bg-green-600"
+              >
+                Download render
+              </a>
+              <Link href="/export" className="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-100 hover:bg-gray-700">
+                Review in Export
+              </Link>
+            </div>
+          )}
+          {(error || accountError) && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button onClick={() => void loadVideos()} className="rounded bg-red-700 px-3 py-1.5 text-xs text-white hover:bg-red-600">
+                Retry media
+              </button>
+              <button onClick={() => void loadAccount()} className="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-100 hover:bg-gray-700">
+                Retry account
+              </button>
+              {shouldShowAccountCta(error || accountError) && (
+                <Link href="/account" className="rounded bg-yellow-700 px-3 py-1.5 text-xs text-white hover:bg-yellow-600">
+                  Open Account
+                </Link>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {requestedVideoMissing && (
+        <div className="rounded-lg border border-yellow-800 bg-yellow-950/30 p-3 text-sm text-yellow-100">
+          <div className="font-medium">That editor link points to a video this account cannot load.</div>
+          <p className="mt-1 text-xs text-yellow-200/80">It may have been deleted, belongs to another account, or is still rendering.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button onClick={() => void loadVideos()} className="rounded bg-yellow-700 px-3 py-1.5 text-xs text-white hover:bg-yellow-600">
+              Refresh
+            </button>
+            <Link href="/export" className="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-100 hover:bg-gray-700">
+              Export
+            </Link>
+            <Link href="/variants" className="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-100 hover:bg-gray-700">
+              Generate variants
+            </Link>
+          </div>
         </div>
       )}
 
@@ -364,7 +494,20 @@ export default function SubtitleEditor() {
           </div>
           <div className="max-h-[560px] space-y-2 overflow-y-auto">
             {loading && <p className="text-xs text-gray-500">Loading...</p>}
-            {!loading && videos.length === 0 && <p className="text-xs text-gray-500">No processed videos yet.</p>}
+            {!loading && videos.length === 0 && (
+              <div className="rounded border border-gray-800 bg-gray-950/70 p-3 text-xs text-gray-400">
+                <p className="font-medium text-gray-200">No processed videos yet</p>
+                <p className="mt-1 leading-5 text-gray-500">Process a video or generate variants before editing captions.</p>
+                <div className="mt-3 grid gap-2">
+                  <Link href="/bulk" className="rounded bg-purple-700 px-3 py-2 text-center text-white hover:bg-purple-600">
+                    Process videos
+                  </Link>
+                  <Link href="/variants" className="rounded bg-gray-800 px-3 py-2 text-center text-gray-200 hover:bg-gray-700">
+                    Generate variants
+                  </Link>
+                </div>
+              </div>
+            )}
             {videos.map((video) => (
               <button
                 key={video.filename}
@@ -385,13 +528,14 @@ export default function SubtitleEditor() {
         <section className="space-y-4">
           <div className="grid gap-4 xl:grid-cols-[260px_1fr]">
             <div className="mx-auto aspect-[9/16] w-full max-w-[260px] overflow-hidden rounded-lg border border-gray-700 bg-black">
-              {activeVideo ? (
+              {activeVideo && !activeUnavailable && !previewFailed ? (
                 <div className="relative h-full w-full">
                   <video
                     src={videoFileUrl(activeVideo.filename, accessToken)}
                     controls
                     className="h-full w-full object-contain"
                     preload="metadata"
+                    onError={() => setPreviewFailed(true)}
                   />
                   {track && (
                     <div className={`pointer-events-none absolute inset-0 flex justify-center px-5 ${positionClass}`}>
@@ -407,6 +551,16 @@ export default function SubtitleEditor() {
                       </div>
                     </div>
                   )}
+                </div>
+              ) : activeVideo && (activeUnavailable || previewFailed) ? (
+                <div className="flex h-full flex-col items-center justify-center gap-3 px-5 text-center text-xs text-gray-400">
+                  <div>
+                    <div className="font-medium text-gray-200">Preview unavailable</div>
+                    <div className="mt-1 leading-5 text-gray-500">{activeVideo.unavailable_reason || "The media file could not be loaded."}</div>
+                  </div>
+                  <button onClick={() => void loadVideos()} className="rounded bg-gray-800 px-3 py-1.5 text-gray-200 hover:bg-gray-700">
+                    Refresh
+                  </button>
                 </div>
               ) : (
                 <div className="flex h-full items-center justify-center text-xs text-gray-500">Select a video</div>
@@ -450,12 +604,59 @@ export default function SubtitleEditor() {
                 </label>
                 <button
                   onClick={handleTranscribe}
-                  disabled={!activeId || transcribing}
+                  disabled={!activeId || transcribing || transcriptionBlocked}
                   className="self-end rounded bg-purple-700 px-3 py-2 text-xs text-white hover:bg-purple-600 disabled:opacity-40"
                 >
                   {transcribing ? "Transcribing..." : "Generate transcript"}
                 </button>
               </div>
+              <div className="mt-3 rounded border border-gray-800 bg-gray-950/70 p-3 text-xs text-gray-400">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>Transcription quota: {usageLabel(account, "transcription")}</span>
+                  {account?.billing_required && !account.subscription_active && (
+                    <Link href="/account" className="rounded bg-yellow-700 px-2 py-1 text-white hover:bg-yellow-600">
+                      Activate billing
+                    </Link>
+                  )}
+                </div>
+                {activeUnavailable && (
+                  <p className="mt-2 text-red-300">{activeVideo?.unavailable_reason || "This source file is unavailable."}</p>
+                )}
+                {quotaRemaining === 0 && (
+                  <p className="mt-2 text-yellow-300">Monthly transcription limit reached for this account.</p>
+                )}
+                {transcribing && (
+                  <div className="mt-3">
+                    <div className="mb-1 flex justify-between text-[11px] text-gray-500">
+                      <span>{transcribeStage.label}</span>
+                      <span>{transcribeElapsed}s</span>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded bg-gray-800">
+                      <div className="h-full rounded bg-purple-500 transition-all" style={{ width: `${transcribeStage.progress}%` }} />
+                    </div>
+                    <p className="mt-2 leading-5 text-gray-500">Long multilingual videos can take a few minutes while the provider aligns words.</p>
+                  </div>
+                )}
+              </div>
+              {error && (
+                <div className="mt-3 rounded border border-red-900 bg-red-950/30 p-3 text-xs text-red-100">
+                  <div className="font-medium">Transcript recovery</div>
+                  <p className="mt-1 leading-5 text-red-200/80">
+                    Try Auto provider first, switch to Groq Whisper or Deepgram for API transcription, or paste an SRT/VTT file in the Import panel.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button onClick={handleTranscribe} disabled={!activeId || transcribing || transcriptionBlocked} className="rounded bg-red-700 px-3 py-1.5 text-white hover:bg-red-600 disabled:opacity-40">
+                      Retry transcript
+                    </button>
+                    <button onClick={() => setTranscriptionProvider("auto")} className="rounded bg-gray-800 px-3 py-1.5 text-gray-100 hover:bg-gray-700">
+                      Use Auto
+                    </button>
+                    <button onClick={() => setTranscriptionProvider("groq")} className="rounded bg-gray-800 px-3 py-1.5 text-gray-100 hover:bg-gray-700">
+                      Use Groq
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   onClick={handleApplyTranscript}

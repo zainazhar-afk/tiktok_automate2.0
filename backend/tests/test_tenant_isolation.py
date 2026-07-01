@@ -1,5 +1,9 @@
+import asyncio
+
+import pytest
+
 from app.api import videos
-from app.services import job_queue, state_store
+from app.services import job_queue, state_store, variants
 from app.tenant import reset_current_owner, set_current_owner, storage_video_id
 
 
@@ -94,3 +98,34 @@ def test_job_queue_filters_jobs_by_owner(monkeypatch):
     assert [job.job_id for job in job_queue.list_jobs(owner_id="owner-b")] == [job_b.job_id]
     assert job_queue.get_job(job_a.job_id, owner_id="owner-b") is None
     assert job_queue.get_job(job_a.job_id, owner_id="owner-a").job_id == job_a.job_id
+
+
+def test_variant_source_status_and_generation_are_owner_scoped(tmp_path, monkeypatch):
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    source_path = uploads / "tenant_source.mp4"
+    source_path.write_bytes(b"owner-a-source")
+
+    class Settings:
+        uploads_dir = str(uploads)
+
+    monkeypatch.setattr(variants, "get_settings", lambda: Settings())
+    monkeypatch.setattr(variants, "find_ffmpeg", lambda: "ffmpeg")
+    variants._source_jobs.clear()
+
+    token = set_current_owner("owner-a")
+    try:
+        variants.register_source("tenant_source", source_path.name, path=str(source_path))
+        assert variants.get_source_status("tenant_source")["filename"] == source_path.name
+    finally:
+        reset_current_owner(token)
+
+    token = set_current_owner("owner-b")
+    try:
+        with pytest.raises(FileNotFoundError):
+            variants.get_source_status("tenant_source")
+        with pytest.raises(FileNotFoundError):
+            asyncio.run(variants.generate_variants("tenant_source"))
+    finally:
+        reset_current_owner(token)
+        variants._source_jobs.clear()
